@@ -10,27 +10,58 @@
 | [`private/`](private/) | `rg-<RGBASENAME>-private` | VNet, NSG, Bastion, 점프박스 VM, Foundry(공용 접근 차단) + Private Endpoint + Private DNS | **없음** |
 | [`private-whitelist/`](private-whitelist/) | `rg-<RGBASENAME>-private-whitelist` | private과 같은 리소스 + Route Table + Firewall Policy + Azure Firewall | **없음** |
 
-```
-┌─ 스택 1 ───────────┐ ┌─ 스택 2 ────────────────┐ ┌─ 스택 3 ────────────────────┐
-│ rg-<RGB>-public    │ │ rg-<RGB>-private        │ │ rg-<RGB>-private-whitelist  │
-│                    │ │                         │ │                             │
-│ VNet 10.10.0.0/16  │ │ VNet 10.20.0.0/16       │ │ VNet 10.30.0.0/16           │
-│ Foundry            │ │  ├ AzureBastionSubnet   │ │  ├ AzureFirewallSubnet ──┐  │
-│  공용 접근 열림     │ │  ├ snet-private-endpoint│ │  ├ AzureBastionSubnet    │  │
-│  허용 IP만 통과     │ │  └ snet-jumpbox         │ │  ├ snet-private-endpoint │  │
-│                    │ │      └ 인터넷 직접 연결  │ │  └ snet-jumpbox          │  │
-│ 노트북에서 직접 호출 │ │                         │ │      └ 모든 트래픽 →─────┤  │
-│                    │ │ Bastion → 점프박스 → PE  │ │                          ▼  │
-│                    │ │ Foundry 공용 접근 차단   │ │ Azure Firewall              │
-│                    │ │                         │ │  + Firewall Policy          │
-│                    │ │                         │ │ Bastion → 점프박스 → PE      │
-│                    │ │                         │ │ Foundry 공용 접근 차단       │
-│                    │ │                         │ │ Log Analytics               │
-└────────────────────┘ └─────────────────────────┘ └─────────────────────────────┘
-       독립              아웃바운드 도메인 제한 없음    아웃바운드 도메인 제한 있음
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif","fontSize":"14px","primaryColor":"#e8f0fe","primaryTextColor":"#10243e","primaryBorderColor":"#5b8def","lineColor":"#7a8699","textColor":"#10243e","clusterBkg":"#f7f9fc","clusterBorder":"#c7d2e0","titleColor":"#10243e","edgeLabelBackground":"#ffffff"}}}%%
+flowchart TB
+    laptop["실습자 노트북"]
+    internet(("인터넷"))
+
+    subgraph PUB["스택 1 · rg-RGBASENAME-public · VNet 10.10.0.0/16"]
+        direction TB
+        pubAi["Azure AI Foundry<br/>공용 엔드포인트 열림<br/>등록된 IP만 허용"]
+    end
+
+    subgraph PRV["스택 2 · rg-RGBASENAME-private · VNet 10.20.0.0/16"]
+        direction TB
+        prvBas["AzureBastionSubnet<br/>Azure Bastion"]
+        prvJb["snet-jumpbox<br/>점프박스 VM"]
+        prvPe["snet-private-endpoint<br/>Private Endpoint"]
+        prvAi["Azure AI Foundry<br/>공용 엔드포인트 차단"]
+        prvBas --> prvJb --> prvPe --> prvAi
+    end
+
+    subgraph PWL["스택 3 · rg-RGBASENAME-private-whitelist · VNet 10.30.0.0/16"]
+        direction TB
+        pwlBas["AzureBastionSubnet<br/>Azure Bastion"]
+        pwlJb["snet-jumpbox<br/>점프박스 VM"]
+        pwlPe["snet-private-endpoint<br/>Private Endpoint"]
+        pwlAi["Azure AI Foundry<br/>공용 엔드포인트 차단"]
+        pwlRt["Route Table<br/>0.0.0.0/0 → 10.30.0.4"]
+        pwlFw["AzureFirewallSubnet<br/>Azure Firewall + Firewall Policy<br/>허용 도메인 목록"]
+        pwlBas --> pwlJb --> pwlPe --> pwlAi
+        pwlJb --> pwlRt --> pwlFw
+    end
+
+    laptop -->|"HTTPS · 등록된 IP만"| pubAi
+    laptop -->|"Bastion 세션"| prvBas
+    laptop -->|"Bastion 세션"| pwlBas
+    prvJb -->|"제한 없이 통과"| internet
+    pwlFw -->|"허용 도메인만 통과"| internet
+
+    classDef entry fill:#eef1f5,stroke:#9aa4b2,color:#1f2933
+    classDef ai fill:#e8f0fe,stroke:#5b8def,color:#10243e
+    classDef guard fill:#fdecea,stroke:#d93025,color:#5c1a14
+    classDef open fill:#e6f4ea,stroke:#34a853,color:#0d3b1e
+
+    class laptop,internet entry
+    class pubAi,prvAi,pwlAi ai
+    class pwlRt,pwlFw guard
+    class prvJb open
 ```
 
-(PE = Private Endpoint)
+`PE`는 Private Endpoint의 약자입니다.
+스택 2의 점프박스(초록색)는 인터넷으로 바로 나가고,
+스택 3은 Route Table과 방화벽(빨간색)을 거쳐야만 나갈 수 있습니다.
 
 **스택 2와 스택 3의 차이는 세 가지입니다.**
 
@@ -311,6 +342,39 @@ nslookup <foundry 계정명>.openai.azure.com   # 10.20.1.x 대역 사설 IP가 
 ### 4. 아웃바운드 도메인 제한 비교 — 스택 2 vs 스택 3
 
 같은 명령을 두 점프박스에서 각각 실행합니다. **결과 차이가 곧 방화벽의 효과입니다.**
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif","fontSize":"14px","primaryColor":"#e8f0fe","primaryTextColor":"#10243e","primaryBorderColor":"#5b8def","lineColor":"#7a8699","textColor":"#10243e","clusterBkg":"#f7f9fc","clusterBorder":"#c7d2e0","titleColor":"#10243e","edgeLabelBackground":"#ffffff"}}}%%
+flowchart LR
+    subgraph S2["스택 2 · 도메인 제한 없음"]
+        direction LR
+        jb2["점프박스 VM"]
+        ok2a["login.microsoftonline.com<br/>접속 성공"]
+        ok2b["github.com<br/>접속 성공"]
+        jb2 --> ok2a
+        jb2 --> ok2b
+    end
+
+    subgraph S3["스택 3 · 도메인 제한 있음"]
+        direction LR
+        jb3["점프박스 VM"]
+        rt3["Route Table<br/>0.0.0.0/0"]
+        fw3["Azure Firewall<br/>허용 도메인 목록 검사"]
+        ok3["login.microsoftonline.com<br/>접속 성공<br/>목록에 있음"]
+        ng3["github.com<br/>차단<br/>목록에 없음"]
+        jb3 --> rt3 --> fw3
+        fw3 --> ok3
+        fw3 -.-> ng3
+    end
+
+    classDef pass fill:#e6f4ea,stroke:#34a853,color:#0d3b1e
+    classDef blocked fill:#fdecea,stroke:#d93025,color:#5c1a14
+    classDef step fill:#e8f0fe,stroke:#5b8def,color:#10243e
+
+    class jb2,jb3,rt3,fw3 step
+    class ok2a,ok2b,ok3 pass
+    class ng3 blocked
+```
 
 ```powershell
 Invoke-WebRequest https://login.microsoftonline.com
