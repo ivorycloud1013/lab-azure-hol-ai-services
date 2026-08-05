@@ -16,7 +16,7 @@
 ```bash
 az deployment sub create -n hol01-public -l westus3 \
   --template-file main.bicep \
-  --parameters environmentName=hol01 location=westus3 \
+  --parameters resourceGroupBaseName=hol01 location=westus3 \
                labClientIpAddress="$(curl -s ifconfig.me)" \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
 ```

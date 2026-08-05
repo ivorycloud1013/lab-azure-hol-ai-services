@@ -1,7 +1,7 @@
 metadata description = '''
 [스택 1/3] Public 망 — 독립 배포 단위.
 
-전용 리소스 그룹 rg-<env>-public 하나만 만들고 그 안에서 끝난다.
+전용 리소스 그룹 rg-<기본이름>-public 하나만 만들고 그 안에서 끝난다.
 다른 스택(private, whitelist)과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
 
 접근 경로: 실습자 노트북 -> 인터넷 -> Foundry 공용 엔드포인트
@@ -15,10 +15,19 @@ targetScope = 'subscription'
 
 import { modelDeploymentConfig } from '../modules/ai/model-deployments.bicep'
 
-@description('환경 이름. 리소스 그룹과 리소스 이름의 접두사로 쓰인다.')
+@description('''
+리소스 그룹 기본 이름. 최종 이름은 rg-<이 값>-public 이 된다.
+
+케이스는 준 그대로 리소스 그룹 이름에 보존된다.
+  'RGBASENAME' -> rg-RGBASENAME-public
+  'rgbasename' -> rg-rgbasename-public
+
+단 하위 리소스(VNet, NSG, Foundry 등)의 이름에는 소문자로 변환해 쓴다.
+Foundry 엔드포인트가 DNS 이름이라 대문자를 담을 수 없기 때문이다.
+''')
 @minLength(2)
 @maxLength(16)
-param environmentName string
+param resourceGroupBaseName string
 
 @description('배포 리전. 기본 모델의 GA 가용성을 az cognitiveservices model list로 확인한 리전만 허용한다.')
 @allowed([
@@ -63,16 +72,17 @@ param deployLogAnalytics bool = false
 @description('기존 Log Analytics 작업 영역 ID. deployLogAnalytics=false 일 때만 사용된다.')
 param existingLogAnalyticsWorkspaceId string = ''
 
-var namePrefix = toLower(environmentName)
-var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
+var namePrefix = toLower(resourceGroupBaseName)
+var resourceToken = toLower(uniqueString(subscription().id, resourceGroupBaseName, location))
 
 var defaultTags = union(tags, {
-  'azd-env-name': environmentName
+  'azd-env-name': resourceGroupBaseName
   workload: 'ai-foundry-hol'
   stack: 'public'
 })
 
-var resourceGroupName = 'rg-${namePrefix}-public'
+// 케이스를 보존하기 위해 namePrefix(소문자)가 아니라 원본 값을 쓴다.
+var resourceGroupName = 'rg-${resourceGroupBaseName}-public'
 
 resource publicResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: resourceGroupName

@@ -29,7 +29,7 @@ Bastion → 점프박스 → Private Endpoint 경로로만 Foundry에 접근하�
 ```bash
 az deployment sub create -n hol01-private -l westus3 \
   --template-file main.bicep \
-  --parameters environmentName=hol01 location=westus3 \
+  --parameters resourceGroupBaseName=hol01 location=westus3 \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
                vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 ```

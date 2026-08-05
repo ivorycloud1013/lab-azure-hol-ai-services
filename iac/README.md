@@ -42,7 +42,7 @@ export LOC=westus3
 ```bash
 az deployment sub create -n $ENV-public -l $LOC \
   --template-file iac/public/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                labClientIpAddress="$(curl -s ifconfig.me)" \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
 ```
@@ -52,7 +52,7 @@ az deployment sub create -n $ENV-public -l $LOC \
 ```bash
 az deployment sub create -n $ENV-private -l $LOC \
   --template-file iac/private/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
                vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 ```
@@ -69,7 +69,7 @@ PRV=$(az deployment sub show -n $ENV-private --query properties.outputs -o json)
 
 az deployment sub create -n $ENV-whitelist -l $LOC \
   --template-file iac/whitelist/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                privateVnetResourceGroupName=$(echo $PRV | jq -r .PRIVATE_RESOURCE_GROUP.value) \
                privateVnetName=$(echo $PRV | jq -r .PRIVATE_VNET_NAME.value) \
                expectedFirewallPrivateIp=$(echo $PRV | jq -r .EXPECTED_FIREWALL_PRIVATE_IP.value)
@@ -101,7 +101,7 @@ cd ../whitelist && azd env new hol01 && azd env set PRIVATE_RESOURCE_GROUP rg-ho
 ```bash
 az deployment sub create -n $ENV-whitelist -l $LOC \
   --template-file iac/whitelist/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                privateVnetResourceGroupName=rg-$ENV-private \
                privateVnetName=vnet-$ENV-private \
                additionalAllowedFqdns='["github.com","*.githubusercontent.com"]'

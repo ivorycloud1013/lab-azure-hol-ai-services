@@ -38,20 +38,20 @@ export ENV=hol01 LOC=westus3
 
 # 1) Public (독립)
 az deployment sub create -n $ENV-public -l $LOC --template-file iac/public/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                labClientIpAddress="$(curl -s ifconfig.me)" \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
 
 # 2) Private
 az deployment sub create -n $ENV-private -l $LOC --template-file iac/private/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
                vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 
 # 3) Whitelist (private 출력을 입력으로)
 PRV=$(az deployment sub show -n $ENV-private --query properties.outputs -o json)
 az deployment sub create -n $ENV-whitelist -l $LOC --template-file iac/whitelist/main.bicep \
-  --parameters environmentName=$ENV location=$LOC \
+  --parameters resourceGroupBaseName=$ENV location=$LOC \
                privateVnetResourceGroupName=$(echo $PRV | jq -r .PRIVATE_RESOURCE_GROUP.value) \
                privateVnetName=$(echo $PRV | jq -r .PRIVATE_VNET_NAME.value) \
                expectedFirewallPrivateIp=$(echo $PRV | jq -r .EXPECTED_FIREWALL_PRIVATE_IP.value)

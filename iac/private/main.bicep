@@ -1,7 +1,7 @@
 metadata description = '''
 [스택 2/3] Private 망 — 독립 배포 단위.
 
-전용 리소스 그룹 rg-<env>-private 을 만들고 그 안에 네트워크와 워크로드를 배포한다.
+전용 리소스 그룹 rg-<기본이름>-private 을 만들고 그 안에 네트워크와 워크로드를 배포한다.
 방화벽 자체는 이 스택에 없다. 화이트리스트는 [스택 3/3] whitelist 가 소유한다.
 
 이 스택이 만드는 것
@@ -23,10 +23,21 @@ targetScope = 'subscription'
 
 import { modelDeploymentConfig } from '../modules/ai/model-deployments.bicep'
 
-@description('환경 이름. 리소스 그룹과 리소스 이름의 접두사로 쓰인다.')
+@description('''
+리소스 그룹 기본 이름. 최종 이름은 rg-<이 값>-private 이 된다.
+
+케이스는 준 그대로 리소스 그룹 이름에 보존된다.
+  'RGBASENAME' -> rg-RGBASENAME-private
+  'rgbasename' -> rg-rgbasename-private
+
+단 하위 리소스(VNet, NSG, Foundry 등)의 이름에는 소문자로 변환해 쓴다.
+Foundry 엔드포인트가 DNS 이름이라 대문자를 담을 수 없기 때문이다.
+
+whitelist 스택에도 같은 값을 넘겨야 방화벽이 이 VNet을 찾는다.
+''')
 @minLength(2)
 @maxLength(16)
-param environmentName string
+param resourceGroupBaseName string
 
 @description('배포 리전. 기본 모델의 GA 가용성을 az cognitiveservices model list로 확인한 리전만 허용한다.')
 @allowed([
@@ -97,16 +108,17 @@ param existingLogAnalyticsWorkspaceId string = ''
 @allowed(['Audit', 'Deny', 'Disabled'])
 param subnetNsgPolicyEffect string = 'Audit'
 
-var namePrefix = toLower(environmentName)
-var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
+var namePrefix = toLower(resourceGroupBaseName)
+var resourceToken = toLower(uniqueString(subscription().id, resourceGroupBaseName, location))
 
 var defaultTags = union(tags, {
-  'azd-env-name': environmentName
+  'azd-env-name': resourceGroupBaseName
   workload: 'ai-foundry-hol'
   stack: 'private'
 })
 
-var resourceGroupName = 'rg-${namePrefix}-private'
+// 케이스를 보존하기 위해 namePrefix(소문자)가 아니라 원본 값을 쓴다.
+var resourceGroupName = 'rg-${resourceGroupBaseName}-private'
 
 var firewallSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 26, 0)
 var firewallManagementSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 26, 1)

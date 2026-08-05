@@ -27,7 +27,7 @@ PRV=$(az deployment sub show -n hol01-private --query properties.outputs -o json
 
 az deployment sub create -n hol01-whitelist -l westus3 \
   --template-file main.bicep \
-  --parameters environmentName=hol01 location=westus3 \
+  --parameters resourceGroupBaseName=hol01 location=westus3 \
                privateVnetResourceGroupName=$(echo $PRV | jq -r .PRIVATE_RESOURCE_GROUP.value) \
                privateVnetName=$(echo $PRV | jq -r .PRIVATE_VNET_NAME.value) \
                expectedFirewallPrivateIp=$(echo $PRV | jq -r .EXPECTED_FIREWALL_PRIVATE_IP.value)
@@ -38,7 +38,7 @@ az deployment sub create -n hol01-whitelist -l westus3 \
 ```bash
 az deployment sub create -n hol01-whitelist -l westus3 \
   --template-file main.bicep \
-  --parameters environmentName=hol01 location=westus3 \
+  --parameters resourceGroupBaseName=hol01 location=westus3 \
                privateVnetResourceGroupName=rg-hol01-private \
                privateVnetName=vnet-hol01-private \
                additionalAllowedFqdns='["github.com","*.githubusercontent.com"]'

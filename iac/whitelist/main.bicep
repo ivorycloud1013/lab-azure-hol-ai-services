@@ -1,7 +1,7 @@
 metadata description = '''
 [스택 3/3] 화이트리스트 — 독립 배포 단위.
 
-전용 리소스 그룹 rg-<env>-whitelist 에 Azure Firewall Policy와 Azure Firewall을 배포한다.
+전용 리소스 그룹 rg-<기본이름>-whitelist 에 Azure Firewall Policy와 Azure Firewall을 배포한다.
 "무엇을 뚫어줄 것인가"라는 관심사만 이 스택이 소유하므로,
 private 스택을 건드리지 않고 화이트리스트만 갱신·재배포할 수 있다.
 
@@ -20,10 +20,20 @@ private 스택과의 유일한 접점
 
 targetScope = 'subscription'
 
-@description('환경 이름. 리소스 그룹과 리소스 이름의 접두사로 쓰인다. private 스택과 같은 값을 써야 한다.')
+@description('''
+리소스 그룹 기본 이름. 최종 이름은 rg-<이 값>-whitelist 가 된다.
+
+케이스는 준 그대로 리소스 그룹 이름에 보존된다.
+  'RGBASENAME' -> rg-RGBASENAME-whitelist
+  'rgbasename' -> rg-rgbasename-whitelist
+
+단 하위 리소스(방화벽, 정책 등)의 이름에는 소문자로 변환해 쓴다.
+
+private 스택과 같은 값을 써야 한다.
+''')
 @minLength(2)
 @maxLength(16)
-param environmentName string
+param resourceGroupBaseName string
 
 @description('배포 리전. private 스택과 같은 리전이어야 한다.')
 @allowed([
@@ -138,16 +148,17 @@ param deployLogAnalytics bool = true
 @description('기존 Log Analytics 작업 영역 ID. deployLogAnalytics=false 일 때만 사용된다.')
 param existingLogAnalyticsWorkspaceId string = ''
 
-var namePrefix = toLower(environmentName)
-var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
+var namePrefix = toLower(resourceGroupBaseName)
+var resourceToken = toLower(uniqueString(subscription().id, resourceGroupBaseName, location))
 
 var defaultTags = union(tags, {
-  'azd-env-name': environmentName
+  'azd-env-name': resourceGroupBaseName
   workload: 'ai-foundry-hol'
   stack: 'whitelist'
 })
 
-var resourceGroupName = 'rg-${namePrefix}-whitelist'
+// 케이스를 보존하기 위해 namePrefix(소문자)가 아니라 원본 값을 쓴다.
+var resourceGroupName = 'rg-${resourceGroupBaseName}-whitelist'
 
 var requiresManagementSubnet = firewallSkuTier == 'Basic'
 
