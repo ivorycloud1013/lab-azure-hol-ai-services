@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# 스택 1/3 — Public 망. 이 디렉터리에서 `azd up` 을 실행한다.
+name: hol-ai-foundry-public
+metadata:
+  template: lab-azure-hol-ai-services-public@1.0.0
+infra:
+  provider: bicep
+  path: .
+  module: main
