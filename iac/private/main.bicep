@@ -1,10 +1,10 @@
 metadata description = '''
-[스택 2/3] Private 망 — 단독으로 배포할 수 있는 스택.
+[시스템 2/3] Private 망 — 단독으로 배포할 수 있는 시스템.
 
 rg-<기본이름>-private 이라는 전용 리소스 그룹을 만들고, 모든 리소스를 그 안에 배포한다.
-다른 스택의 리소스를 참조하지 않으므로 배포 순서를 지킬 필요가 없다.
+다른 시스템의 리소스를 참조하지 않으므로 배포 순서를 지킬 필요가 없다.
 
-이 스택이 만드는 리소스 — 하나의 VNet 안에 Foundry 와 VM 만 배포한다.
+이 시스템이 만드는 리소스 — 하나의 VNet 안에 Foundry 와 VM 만 배포한다.
   - Virtual Network (Bastion / Private Endpoint / 점프박스용 서브넷)
   - 모든 서브넷에 연결되는 NSG (기본은 전부 차단, 필요한 통신만 허용)
   - Azure Bastion 과 점프박스 VM
@@ -14,11 +14,11 @@ rg-<기본이름>-private 이라는 전용 리소스 그룹을 만들고, 모든
 
 접근 경로: 실습자 노트북 -> Azure Bastion -> 점프박스 VM -> Private Endpoint -> Foundry
 
-이 스택에는 방화벽이 없다.
+이 시스템에는 방화벽이 없다.
   점프박스에서 나가는 트래픽은 NSG가 IP 대역과 포트 수준까지만 확인하고, 인터넷으로 바로 나간다.
   즉 어떤 사이트든 접속할 수 있다.
-  접속 가능한 도메인(FQDN)까지 제한하려면 [스택 3/3] private-whitelist 를 사용한다.
-  그 스택은 이 스택과 별개로 자기 VNet, Foundry, VM 을 따로 만든다.
+  접속 가능한 도메인(FQDN)까지 제한하려면 [시스템 3/3] private-whitelist 를 사용한다.
+  그 시스템은 이 시스템과 별개로 자기 VNet, Foundry, VM 을 따로 만든다.
 '''
 
 targetScope = 'subscription'
@@ -60,7 +60,7 @@ param labUserPrincipalType string = 'User'
 
 @description('''
 Private VNet 주소 공간.
-다른 스택과 겹치지 않아야 한다 — public 10.10.0.0/16, private-whitelist 10.30.0.0/16.
+다른 시스템과 겹치지 않아야 한다 — public 10.10.0.0/16, private-whitelist 10.30.0.0/16.
 ''')
 param privateVnetAddressPrefix string = '10.20.0.0/16'
 
@@ -95,7 +95,7 @@ param modelDeployments modelDeploymentConfig[] = [
   }
 ]
 
-@description('이 스택 전용 Log Analytics 작업 영역을 만들지 여부')
+@description('이 시스템 전용 Log Analytics 작업 영역을 만들지 여부')
 param deployLogAnalytics bool = false
 
 @description('기존 Log Analytics 작업 영역 ID. deployLogAnalytics=false 일 때만 사용된다.')
@@ -141,9 +141,9 @@ module logAnalytics '../modules/monitor/log-analytics.bicep' = if (deployLogAnal
 
 var logAnalyticsWorkspaceId = deployLogAnalytics ? logAnalytics!.outputs.id : existingLogAnalyticsWorkspaceId
 
-// 이 스택은 방화벽을 만들지 않으므로 방화벽용 서브넷(platformSubnets)과
+// 이 시스템은 방화벽을 만들지 않으므로 방화벽용 서브넷(platformSubnets)과
 // Route Table(jumpboxRouteTableId)을 넘기지 않는다.
-// 이 두 매개변수를 비워 두는 것이 private-whitelist 스택과의 유일한 차이다.
+// 이 두 매개변수를 비워 두는 것이 private-whitelist 시스템과의 유일한 차이다.
 module workload '../modules/workload/private-foundry-workload.bicep' = {
   scope: privateResourceGroup
   name: 'private-workload'
@@ -193,7 +193,7 @@ module subnetNsgPolicy '../modules/governance/subnet-nsg-policy.bicep' = if (sub
 @description('배포 리전')
 output AZURE_LOCATION string = location
 
-@description('이 스택의 리소스 그룹')
+@description('이 시스템의 리소스 그룹')
 output PRIVATE_RESOURCE_GROUP string = resourceGroupName
 
 @description('Private VNet 이름')
@@ -220,5 +220,5 @@ output JUMPBOX_PRIVATE_IP string = workload.outputs.jumpboxPrivateIpAddress
 @description('Azure Bastion 이름')
 output BASTION_NAME string = workload.outputs.bastionName
 
-@description('NSG가 연결되지 않은 서브넷 목록. 이 스택에는 플랫폼 예외가 없으므로 비어 있어야 한다.')
+@description('NSG가 연결되지 않은 서브넷 목록. 이 시스템에는 플랫폼 예외가 없으므로 비어 있어야 한다.')
 output SUBNETS_WITHOUT_NSG array = workload.outputs.subnetsWithoutNsg

@@ -11,9 +11,9 @@ Private 망 + 접속 허용 도메인 목록 리소스 (리소스 그룹 범위�
 배포 순서에 문제가 없는 이유
   Route Table 의 다음 홉(next hop) 주소는 방화벽이 할당받을 IP를 cidrHost 함수로 미리 계산한 값이다.
   그래서 VNet -> Firewall -> Route Table -> VNet 으로 이어지는 순환 참조 없이
-  Route Table -> VNet -> Firewall 순서로 한 스택 안에서 모두 배포된다.
+  Route Table -> VNet -> Firewall 순서로 한 시스템 안에서 모두 배포된다.
   Firewall Policy 와 Azure Firewall 도 같은 파일에 둔다.
-  Azure Firewall 은 생성 시점에 연결할 정책이 이미 있어야 하기 때문에, 둘을 다른 스택으로 나누면
+  Azure Firewall 은 생성 시점에 연결할 정책이 이미 있어야 하기 때문에, 둘을 다른 시스템으로 나누면
   배포 순서를 사람이 맞춰야 한다.
 '''
 
@@ -23,7 +23,7 @@ import { modelDeploymentConfig } from '../modules/ai/model-deployments.bicep'
 @description('리소스 이름 접두사')
 param namePrefix string
 
-@description('리소스 이름 접미사. 스택을 구분한다.')
+@description('리소스 이름 접미사. 시스템을 구분한다.')
 param nameSuffix string
 
 @description('전역 고유 이름에 사용할 토큰')

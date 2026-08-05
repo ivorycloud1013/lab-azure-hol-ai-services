@@ -9,8 +9,8 @@ Private 망 공통 리소스 묶음 (리소스 그룹 범위에 배포되는 모
   - Azure AI Foundry 계정 + Private Endpoint + Private DNS Zone
   - Foundry 호출에 필요한 RBAC 역할 할당 (API 키를 쓰지 않는 keyless 인증)
 
-private 스택과 private-whitelist 스택이 이 모듈을 공통으로 사용한다.
-두 스택이 같은 내용을 각자 복사해서 갖고 있으면, 한쪽만 수정했을 때 보안 설정이
+private 시스템과 private-whitelist 시스템이 이 모듈을 공통으로 사용한다.
+두 시스템이 같은 내용을 각자 복사해서 갖고 있으면, 한쪽만 수정했을 때 보안 설정이
 서로 어긋나는 문제(configuration drift)가 생긴다. 그래서 공통 부분은 이 파일에만 둔다.
 
 이 모듈이 적용하는 접근 통제는 두 가지다.
@@ -20,13 +20,13 @@ private 스택과 private-whitelist 스택이 이 모듈을 공통으로 사용�
      닫고, networkAcls.bypass=None 으로 "신뢰할 수 있는 Azure 서비스"의 예외 통과도 막는다.
      결과적으로 Private Endpoint 를 통한 접근만 가능하다.
 
-private 스택과 private-whitelist 스택의 차이는 아래 매개변수 2개로만 표현된다.
+private 시스템과 private-whitelist 시스템의 차이는 아래 매개변수 2개로만 표현된다.
   platformSubnets     : NSG를 연결할 수 없는 서브넷(AzureFirewallSubnet 등)을 추가로 만든다.
-                        private 스택은 빈 배열을 넘기고,
-                        private-whitelist 스택은 방화벽용 서브넷을 넘긴다.
+                        private 시스템은 빈 배열을 넘기고,
+                        private-whitelist 시스템은 방화벽용 서브넷을 넘긴다.
   jumpboxRouteTableId : 점프박스 서브넷에 연결할 Route Table 의 리소스 ID.
-                        private 스택은 빈 문자열을 넘겨 인터넷으로 바로 나가게 하고,
-                        private-whitelist 스택은 "0.0.0.0/0 -> 방화벽" 경로를 넘긴다.
+                        private 시스템은 빈 문자열을 넘겨 인터넷으로 바로 나가게 하고,
+                        private-whitelist 시스템은 "0.0.0.0/0 -> 방화벽" 경로를 넘긴다.
 
 NSG 규칙은 IP 대역과 포트(OSI 3~4계층) 수준까지만 허용 범위를 정한다.
 도메인 이름(FQDN) 단위의 통제는 이 모듈이 아니라 Azure Firewall 이 담당한다.
@@ -44,7 +44,7 @@ import {
 @description('리소스 이름 접두사. 소문자여야 한다(Foundry 엔드포인트가 DNS 이름이다).')
 param namePrefix string
 
-@description('리소스 이름 접미사. 스택을 구분한다. 예: private, private-whitelist')
+@description('리소스 이름 접미사. 시스템을 구분한다. 예: private, private-whitelist')
 param nameSuffix string
 
 @description('전역 고유 이름에 사용할 토큰')
@@ -324,7 +324,7 @@ var jumpboxNsgRules = [
   {
     name: 'AllowInternetOutbound'
     properties: {
-      description: 'HTTP/HTTPS 아웃바운드. UDR이 걸린 스택에서는 방화벽으로 강제 터널링되어 FQDN 통제를 받는다.'
+      description: 'HTTP/HTTPS 아웃바운드. UDR이 걸린 시스템에서는 방화벽으로 강제 터널링되어 FQDN 통제를 받는다.'
       priority: 120
       direction: 'Outbound'
       access: 'Allow'

@@ -1,8 +1,8 @@
 metadata description = '''
-[스택 1/3] Public 망 — 독립 배포 단위.
+[시스템 1/3] Public 망 — 독립 배포 단위.
 
 전용 리소스 그룹 rg-<기본이름>-public 하나만 만들고 그 안에서 끝난다.
-다른 스택(private, private-whitelist)과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
+다른 시스템(private, private-whitelist)과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
 
 접근 경로: 실습자 노트북 -> 인터넷 -> Foundry 공용 엔드포인트
 
@@ -66,7 +66,7 @@ param modelDeployments modelDeploymentConfig[] = [
   }
 ]
 
-@description('이 스택 전용 Log Analytics 작업 영역을 만들지 여부')
+@description('이 시스템 전용 Log Analytics 작업 영역을 만들지 여부')
 param deployLogAnalytics bool = false
 
 @description('기존 Log Analytics 작업 영역 ID. deployLogAnalytics=false 일 때만 사용된다.')

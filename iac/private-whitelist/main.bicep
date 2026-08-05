@@ -1,20 +1,20 @@
 metadata description = '''
-[스택 3/3] Private 망 + 접속 허용 도메인 목록(whitelist) — 단독으로 배포할 수 있는 스택.
+[시스템 3/3] Private 망 + 접속 허용 도메인 목록(whitelist) — 단독으로 배포할 수 있는 시스템.
 
 rg-<기본이름>-private-whitelist 라는 전용 리소스 그룹을 만들고, 모든 리소스를 그 안에 배포한다.
-private 스택과 마찬가지로 VNet, Foundry, VM 을 자기 리소스로 갖는다.
+private 시스템과 마찬가지로 VNet, Foundry, VM 을 자기 리소스로 갖는다.
 여기에 더해 점프박스가 접속할 수 있는 도메인(FQDN)을 Azure Firewall 로 제한한다.
 
-private 스택과 다른 점은 세 가지다.
+private 시스템과 다른 점은 세 가지다.
   1) VNet 안에 방화벽용 서브넷(AzureFirewallSubnet, AzureFirewallManagementSubnet)을 함께 만든다
   2) 점프박스 서브넷에 Route Table 을 연결해, 모든 아웃바운드 트래픽(0.0.0.0/0)을 방화벽으로 보낸다
   3) Firewall Policy(허용 도메인 목록)와 Azure Firewall 을 배포한다
 
 그 외의 구성(NSG 기본 차단 규칙, 공용 접근을 막은 Foundry, Bastion, 점프박스 VM,
-API 키 없이 동작하는 RBAC 역할 할당)은 private 스택과 같은 공통 모듈
+API 키 없이 동작하는 RBAC 역할 할당)은 private 시스템과 같은 공통 모듈
 modules/workload/private-foundry-workload.bicep 을 사용한다.
 
-두 스택은 서로의 리소스를 참조하지 않는다. 따라서 따로 배포하고 따로 삭제할 수 있으며,
+두 시스템은 서로의 리소스를 참조하지 않는다. 따라서 따로 배포하고 따로 삭제할 수 있으며,
 같은 구독에 둘 다 배포해 두면 "도메인 제한이 없는 환경"과 "있는 환경"을 바로 비교할 수 있다.
 
 Route Table 의 다음 홉(next hop) 주소를 미리 계산하는 이유
@@ -64,7 +64,7 @@ param labUserPrincipalType string = 'User'
 
 @description('''
 VNet 주소 공간.
-다른 스택과 겹치지 않아야 한다 — public 10.10.0.0/16, private 10.20.0.0/16.
+다른 시스템과 겹치지 않아야 한다 — public 10.10.0.0/16, private 10.20.0.0/16.
 ''')
 param vnetAddressPrefix string = '10.30.0.0/16'
 
@@ -102,7 +102,7 @@ param modelDeployments modelDeploymentConfig[] = [
 @description('''
 Azure Firewall SKU.
 Basic은 AzureFirewallManagementSubnet과 별도 공인 IP를 추가로 요구하며,
-이 스택이 두 가지를 모두 알아서 만든다(private 스택과 맞출 설정이 없다).
+이 시스템이 두 가지를 모두 알아서 만든다(private 시스템과 맞출 설정이 없다).
 ''')
 @allowed(['Basic', 'Standard', 'Premium'])
 param firewallSkuTier string = 'Basic'
@@ -176,7 +176,7 @@ param allowedFqdnTags string[] = [
 ]
 
 @description('''
-이 스택 전용 Log Analytics 작업 영역을 만들지 여부.
+이 시스템 전용 Log Analytics 작업 영역을 만들지 여부.
 방화벽이 무엇을 막고 무엇을 통과시켰는지 보려면 필요하므로 기본값이 true다.
 ''')
 param deployLogAnalytics bool = true
@@ -285,7 +285,7 @@ module subnetNsgPolicy '../modules/governance/subnet-nsg-policy.bicep' = if (sub
 @description('배포 리전')
 output AZURE_LOCATION string = location
 
-@description('이 스택의 리소스 그룹')
+@description('이 시스템의 리소스 그룹')
 output PRIVATE_WHITELIST_RESOURCE_GROUP string = resourceGroupName
 
 @description('VNet 이름')
