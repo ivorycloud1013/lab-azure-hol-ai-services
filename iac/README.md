@@ -127,6 +127,26 @@ az deployment sub show -n $RGBASENAME-private-whitelist \
 # true 여야 합니다. false 이면 Route Table에 설정한 주소와 실제 방화벽 IP가 다른 상태입니다.
 ```
 
+### Makefile로 배포하기
+
+위 명령들을 `iac/Makefile`에 정리해 두었습니다. `az login`은 이미 로그인돼 있으면
+건너뛰고, 공인 IP와 Entra 오브젝트 ID는 자동으로 조회합니다.
+
+```bash
+cd iac
+make help                      # 전체 타겟 목록
+
+make deploy-public             # 시스템 1
+make deploy-private            # 시스템 2 (VM 비밀번호는 입력 프롬프트)
+make deploy-private-whitelist  # 시스템 3 (배포 후 검증까지 자동 실행)
+```
+
+값을 바꾸려면 인자로 넘깁니다. `make deploy-public RGBASENAME=hol02 REGION=eastus2`
+
+배포 전 변경 사항만 보려면 `make whatif-public`, 배포 후 확인은 `make verify-public`,
+출력값 전체는 `make outputs-public`입니다. 삭제는 실수를 막기 위해
+`make destroy-public CONFIRM=yes`처럼 `CONFIRM=yes`가 있어야 동작합니다.
+
 ### Azure Developer CLI(azd)로 배포하기
 
 각 시스템 디렉터리가 독립된 azd 프로젝트입니다. 해당 폴더로 이동해 실행합니다.
