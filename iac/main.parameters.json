@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "labClientIpAddress": {
+      "value": "${LAB_CLIENT_IP}"
+    },
+    "labUserPrincipalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "labUserPrincipalType": {
+      "value": "${LAB_USER_PRINCIPAL_TYPE=User}"
+    },
+    "vmAdminUsername": {
+      "value": "${VM_ADMIN_USERNAME=azureuser}"
+    },
+    "vmAdminPassword": {
+      "value": "${VM_ADMIN_PASSWORD}"
+    },
+    "deployPublicZone": {
+      "value": "${DEPLOY_PUBLIC_ZONE=true}"
+    },
+    "deployPrivateZone": {
+      "value": "${DEPLOY_PRIVATE_ZONE=true}"
+    },
+    "firewallSkuTier": {
+      "value": "${FIREWALL_SKU_TIER=Basic}"
+    },
+    "bastionSkuName": {
+      "value": "${BASTION_SKU_NAME=Basic}"
+    },
+    "deployLogAnalytics": {
+      "value": "${DEPLOY_LOG_ANALYTICS=true}"
+    },
+    "subnetNsgPolicyEffect": {
+      "value": "${SUBNET_NSG_POLICY_EFFECT=Audit}"
+    }
+  }
+}
