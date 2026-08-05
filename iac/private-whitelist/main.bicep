@@ -1,26 +1,28 @@
 metadata description = '''
-[스택 3/3] Private 망 + URL 화이트리스트 — 독립 배포 단위.
+[스택 3/3] Private 망 + 접속 허용 도메인 목록(whitelist) — 단독으로 배포할 수 있는 스택.
 
-전용 리소스 그룹 rg-<기본이름>-private-whitelist 를 만들고 그 안에서 끝난다.
-private 스택과 마찬가지로 VNet·Foundry·VM 한 벌을 자기 것으로 갖되,
-점프박스가 접근하는 URL(FQDN)까지 Azure Firewall로 통제한다.
+rg-<기본이름>-private-whitelist 라는 전용 리소스 그룹을 만들고, 모든 리소스를 그 안에 배포한다.
+private 스택과 마찬가지로 VNet, Foundry, VM 을 자기 리소스로 갖는다.
+여기에 더해 점프박스가 접속할 수 있는 도메인(FQDN)을 Azure Firewall 로 제한한다.
 
-private 스택과의 차이는 딱 세 가지다
-  1) VNet에 AzureFirewallSubnet(+Management)을 함께 만든다
-  2) 점프박스 서브넷에 0.0.0.0/0 -> 방화벽 UDR을 건다
-  3) Firewall Policy(FQDN 화이트리스트)와 Azure Firewall을 배포한다
+private 스택과 다른 점은 세 가지다.
+  1) VNet 안에 방화벽용 서브넷(AzureFirewallSubnet, AzureFirewallManagementSubnet)을 함께 만든다
+  2) 점프박스 서브넷에 Route Table 을 연결해, 모든 아웃바운드 트래픽(0.0.0.0/0)을 방화벽으로 보낸다
+  3) Firewall Policy(허용 도메인 목록)와 Azure Firewall 을 배포한다
 
-나머지(NSG deny-all 기준선, 비공개 Foundry, Bastion, 점프박스, keyless RBAC)는
-private 스택과 같은 공통 모듈(modules/workload/private-foundry-workload.bicep)을 쓴다.
+그 외의 구성(NSG 기본 차단 규칙, 공용 접근을 막은 Foundry, Bastion, 점프박스 VM,
+API 키 없이 동작하는 RBAC 역할 할당)은 private 스택과 같은 공통 모듈
+modules/workload/private-foundry-workload.bicep 을 사용한다.
 
-두 스택은 서로를 참조하지 않는다. 무엇도 공유하지 않으므로 따로 배포·삭제되고,
-같은 구독에 나란히 띄워 "URL 통제가 없는 망"과 "있는 망"을 나란히 비교할 수 있다.
+두 스택은 서로의 리소스를 참조하지 않는다. 따라서 따로 배포하고 따로 삭제할 수 있으며,
+같은 구독에 둘 다 배포해 두면 "도메인 제한이 없는 환경"과 "있는 환경"을 바로 비교할 수 있다.
 
-UDR next hop
-  Azure Firewall은 전용 AzureFirewallSubnet에서 항상 첫 할당 가능 주소(x.x.x.4)를 받는다.
-  (.0 네트워크 / .1 게이트웨이 / .2 .3 Azure 예약)
-  cidrHost(prefix, 3)으로 미리 계산해 Route Table을 만들고,
-  실제 할당값과 일치하는지 FIREWALL_ROUTE_IS_VALID 출력으로 검증한다.
+Route Table 의 다음 홉(next hop) 주소를 미리 계산하는 이유
+  Azure Firewall 은 AzureFirewallSubnet 에서 항상 사용 가능한 첫 번째 IP(x.x.x.4)를 할당받는다.
+  (.0 은 네트워크 주소, .1 은 게이트웨이, .2 와 .3 은 Azure 예약 주소)
+  그래서 방화벽을 만들기 전에 cidrHost(prefix, 3) 으로 주소를 계산해 Route Table 을 먼저 만든다.
+  이렇게 하지 않으면 VNet -> Firewall -> Route Table -> VNet 순환 참조가 생겨 배포할 수 없다.
+  계산한 주소와 실제 할당된 주소가 같은지는 FIREWALL_ROUTE_IS_VALID 출력값으로 확인한다.
 '''
 
 targetScope = 'subscription'
@@ -110,7 +112,7 @@ param firewallSkuTier string = 'Basic'
 param threatIntelMode string = 'Alert'
 
 // ---------------------------------------------------------------------------
-// 화이트리스트 본체 — 점프박스가 어떤 URL로 나갈 수 있는지
+// 접속 허용 목록 — 점프박스가 어떤 도메인으로 나갈 수 있는지 정한다
 // ---------------------------------------------------------------------------
 
 @description('L4로 허용할 Azure 서비스 태그 목록')
@@ -323,8 +325,8 @@ output FIREWALL_PUBLIC_IP string = resources.outputs.firewallPublicIpAddress
 output FIREWALL_POLICY_NAME string = resources.outputs.firewallPolicyName
 
 @description('''
-실제 방화벽 IP가 Route Table의 next hop과 일치하는지 여부.
-false면 강제 터널링이 동작하지 않으므로 아웃바운드가 블랙홀이 된다.
+실제 할당된 방화벽 IP가 Route Table 에 설정한 다음 홉(next hop) 주소와 같은지 여부.
+false 이면 점프박스의 트래픽이 존재하지 않는 주소로 전달되어, 아웃바운드 통신이 모두 실패한다.
 ''')
 output FIREWALL_ROUTE_IS_VALID bool = resources.outputs.firewallPrivateIpAddress == resources.outputs.routeNextHopIpAddress
 

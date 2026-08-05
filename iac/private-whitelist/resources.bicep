@@ -1,17 +1,20 @@
 metadata description = '''
-Private 망 + URL 화이트리스트 리소스 (리소스 그룹 범위).
+Private 망 + 접속 허용 도메인 목록 리소스 (리소스 그룹 범위에 배포된다).
 
-공통 워크로드(modules/workload/private-foundry-workload.bicep)에 세 가지를 얹는다.
-  1) AzureFirewallSubnet(+Management) — VNet에 함께 정의한다. NSG 연결이 플랫폼 차원에서
-     불가능하므로 networkSecurityGroupId를 빈 문자열로 넘기며, subnetsWithoutNsg에 드러난다.
-  2) Route Table — 점프박스 서브넷의 0.0.0.0/0 을 방화벽으로 강제 터널링한다.
-  3) Firewall Policy + Azure Firewall — 점프박스가 접근할 수 있는 URL을 화이트리스트로 통제한다.
+공통 모듈 modules/workload/private-foundry-workload.bicep 이 만드는 리소스에 세 가지를 추가한다.
+  1) 방화벽용 서브넷(AzureFirewallSubnet, AzureFirewallManagementSubnet)
+     — VNet 정의에 함께 넣는다. 이 두 서브넷은 Azure 플랫폼 제약으로 NSG를 연결할 수 없어
+       networkSecurityGroupId 에 빈 문자열을 넘기며, subnetsWithoutNsg 출력에 표시된다.
+  2) Route Table — 점프박스 서브넷에서 나가는 모든 트래픽(0.0.0.0/0)을 방화벽으로 보낸다.
+  3) Firewall Policy 와 Azure Firewall — 점프박스가 접속할 수 있는 도메인을 목록으로 제한한다.
 
-배포 순서가 꼬이지 않는 이유
-  Route Table의 next hop은 방화벽이 받게 될 IP를 cidrHost로 미리 계산한 값이다.
-  덕분에 VNet -> Firewall -> RouteTable -> VNet 순환 의존 없이 한 스택에서 전부 만들어진다.
-  Firewall Policy와 Azure Firewall도 한 곳에 둔다 — 갈라 놓으면 방화벽 생성 시점에
-  정책이 필요해 배포 순서가 꼬인다.
+배포 순서에 문제가 없는 이유
+  Route Table 의 다음 홉(next hop) 주소는 방화벽이 할당받을 IP를 cidrHost 함수로 미리 계산한 값이다.
+  그래서 VNet -> Firewall -> Route Table -> VNet 으로 이어지는 순환 참조 없이
+  Route Table -> VNet -> Firewall 순서로 한 스택 안에서 모두 배포된다.
+  Firewall Policy 와 Azure Firewall 도 같은 파일에 둔다.
+  Azure Firewall 은 생성 시점에 연결할 정책이 이미 있어야 하기 때문에, 둘을 다른 스택으로 나누면
+  배포 순서를 사람이 맞춰야 한다.
 '''
 
 import { subnetConfig } from '../modules/network/vnet.bicep'
@@ -142,7 +145,7 @@ module jumpboxRouteTable '../modules/network/route-table.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// 공통 워크로드 - VNet / NSG / Bastion / 점프박스 / Foundry(PE, DNS) / RBAC
+// 공통 모듈 - VNet / NSG / Bastion / 점프박스 VM / Foundry(Private Endpoint, DNS) / 역할 할당
 // ---------------------------------------------------------------------------
 
 // AzureFirewallSubnet / AzureFirewallManagementSubnet은 NSG 연결이 플랫폼 차원에서
@@ -188,15 +191,15 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     labUserPrincipalId: labUserPrincipalId
     labUserPrincipalType: labUserPrincipalType
     projectName: 'proj-private-whitelist'
-    projectDisplayName: 'Private 망 + URL 화이트리스트 실습 프로젝트'
-    projectDescription: 'Private Endpoint 경유 접근 + 방화벽 FQDN 화이트리스트로 아웃바운드를 통제하는 Foundry 프로젝트'
+    projectDisplayName: 'Private 망 + 접속 허용 도메인 제한 실습 프로젝트'
+    projectDescription: 'Private Endpoint 로만 접근할 수 있고, 아웃바운드는 방화벽이 허용한 도메인으로만 나갈 수 있는 Foundry 프로젝트'
     modelDeployments: modelDeployments
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
 }
 
 // ---------------------------------------------------------------------------
-// 화이트리스트 - 점프박스가 나갈 수 있는 URL을 여기서 정한다
+// Azure Firewall - 점프박스가 접속할 수 있는 도메인을 여기서 제한한다
 // ---------------------------------------------------------------------------
 
 module firewallPolicy '../modules/network/firewall-policy.bicep' = {

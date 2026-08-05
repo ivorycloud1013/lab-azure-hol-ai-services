@@ -1,22 +1,24 @@
 metadata description = '''
-[스택 2/3] Private 망 — 독립 배포 단위.
+[스택 2/3] Private 망 — 단독으로 배포할 수 있는 스택.
 
-전용 리소스 그룹 rg-<기본이름>-private 을 만들고 그 안에서 끝난다.
-다른 스택과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
+rg-<기본이름>-private 이라는 전용 리소스 그룹을 만들고, 모든 리소스를 그 안에 배포한다.
+다른 스택의 리소스를 참조하지 않으므로 배포 순서를 지킬 필요가 없다.
 
-이 스택이 만드는 것 — VNet 하나에 Foundry와 VM만 들어간다
-  - VNet (Bastion / Private Endpoint / 점프박스 서브넷)
-  - 모든 서브넷의 NSG (우선순위 4096 deny-all 기준선)
-  - Azure Bastion, 점프박스 VM
-  - Foundry (publicNetworkAccess=Disabled, bypass=None) + Private Endpoint + Private DNS
-  - "모든 서브넷은 NSG 필수" Azure Policy
+이 스택이 만드는 리소스 — 하나의 VNet 안에 Foundry 와 VM 만 배포한다.
+  - Virtual Network (Bastion / Private Endpoint / 점프박스용 서브넷)
+  - 모든 서브넷에 연결되는 NSG (기본은 전부 차단, 필요한 통신만 허용)
+  - Azure Bastion 과 점프박스 VM
+  - Azure AI Foundry (publicNetworkAccess=Disabled, networkAcls.bypass=None)
+    + Private Endpoint + Private DNS Zone
+  - "모든 서브넷에 NSG를 연결해야 한다"를 검사하는 Azure Policy
 
-접근 경로: 실습자 노트북 -> Bastion -> 점프박스 VM -> Private Endpoint -> Foundry
+접근 경로: 실습자 노트북 -> Azure Bastion -> 점프박스 VM -> Private Endpoint -> Foundry
 
-이 스택에 방화벽은 없다
-  점프박스의 아웃바운드는 NSG(대역·포트)까지만 통제되고 인터넷으로 직접 나간다.
-  URL(FQDN) 단위로 통제하려면 [스택 3/3] private-whitelist 를 쓴다.
-  그 스택은 이 스택과 독립된 자기 VNet·Foundry·VM 한 벌을 따로 갖는다.
+이 스택에는 방화벽이 없다.
+  점프박스에서 나가는 트래픽은 NSG가 IP 대역과 포트 수준까지만 확인하고, 인터넷으로 바로 나간다.
+  즉 어떤 사이트든 접속할 수 있다.
+  접속 가능한 도메인(FQDN)까지 제한하려면 [스택 3/3] private-whitelist 를 사용한다.
+  그 스택은 이 스택과 별개로 자기 VNet, Foundry, VM 을 따로 만든다.
 '''
 
 targetScope = 'subscription'
@@ -139,8 +141,9 @@ module logAnalytics '../modules/monitor/log-analytics.bicep' = if (deployLogAnal
 
 var logAnalyticsWorkspaceId = deployLogAnalytics ? logAnalytics!.outputs.id : existingLogAnalyticsWorkspaceId
 
-// 방화벽이 없으므로 플랫폼 서브넷도, UDR도 넘기지 않는다.
-// 이 두 매개변수를 비운 것이 private-whitelist 스택과의 유일한 차이다.
+// 이 스택은 방화벽을 만들지 않으므로 방화벽용 서브넷(platformSubnets)과
+// Route Table(jumpboxRouteTableId)을 넘기지 않는다.
+// 이 두 매개변수를 비워 두는 것이 private-whitelist 스택과의 유일한 차이다.
 module workload '../modules/workload/private-foundry-workload.bicep' = {
   scope: privateResourceGroup
   name: 'private-workload'

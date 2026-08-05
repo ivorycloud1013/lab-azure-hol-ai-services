@@ -1,24 +1,35 @@
 metadata description = '''
-Private 망 워크로드 합성 모듈 (리소스 그룹 범위).
+Private 망 공통 리소스 묶음 (리소스 그룹 범위에 배포되는 모듈).
 
-"VNet + NSG + Bastion + 점프박스 VM + 비공개 Foundry(PE/DNS) + keyless RBAC" 한 벌을 만든다.
-private 스택과 private-whitelist 스택이 이 모듈을 함께 쓴다.
-두 스택이 각자 이 구성을 복제하면 NSG deny-all 기준선이나 Foundry keyless 설정이
-스택마다 따로 놀게 되므로, 공통분모는 여기 한 곳에만 둔다.
+여러 리소스를 한 번에 만드는 composite module 이다. 만드는 리소스는 다음과 같다.
+  - Virtual Network (VNet)
+  - Network Security Group (NSG) 3개와 서브넷 연결
+  - Azure Bastion
+  - 점프박스 역할을 하는 Windows 가상 머신(VM)
+  - Azure AI Foundry 계정 + Private Endpoint + Private DNS Zone
+  - Foundry 호출에 필요한 RBAC 역할 할당 (API 키를 쓰지 않는 keyless 인증)
 
-이 모듈이 담당하는 통제 2가지
-  1) NSG          : 모든 서브넷에 연결, 우선순위 4096 deny-all 기준선.
-  2) 서비스 방화벽 : Foundry는 publicNetworkAccess=Disabled, networkAcls bypass=None.
-                    "신뢰할 수 있는 Azure 서비스"도 우회하지 못하고 Private Endpoint로만 접근한다.
+private 스택과 private-whitelist 스택이 이 모듈을 공통으로 사용한다.
+두 스택이 같은 내용을 각자 복사해서 갖고 있으면, 한쪽만 수정했을 때 보안 설정이
+서로 어긋나는 문제(configuration drift)가 생긴다. 그래서 공통 부분은 이 파일에만 둔다.
 
-두 스택의 차이는 매개변수 2개로만 표현된다
-  platformSubnets     : NSG를 붙일 수 없는 플랫폼 서브넷(AzureFirewallSubnet 등)을 추가로 얹는다.
-                        private 스택은 빈 배열, private-whitelist 스택은 방화벽 서브넷을 넘긴다.
-  jumpboxRouteTableId : 점프박스 서브넷에 걸 Route Table.
-                        private 스택은 빈 문자열(인터넷 직통),
-                        private-whitelist 스택은 0.0.0.0/0 -> 방화벽 UDR을 넘긴다.
+이 모듈이 적용하는 접근 통제는 두 가지다.
+  1) NSG: 모든 서브넷에 NSG를 연결하고, 우선순위 4096에 모든 트래픽을 차단하는
+     기본 규칙(deny-all)을 깔아 둔다. 그 위에 필요한 통신만 개별 규칙으로 허용한다.
+  2) Foundry 서비스 자체의 네트워크 설정: publicNetworkAccess=Disabled 로 공용 엔드포인트를
+     닫고, networkAcls.bypass=None 으로 "신뢰할 수 있는 Azure 서비스"의 예외 통과도 막는다.
+     결과적으로 Private Endpoint 를 통한 접근만 가능하다.
 
-L3/L4 허용은 여기서 넓게 두고, FQDN 단위 통제는 이 모듈 밖(방화벽)의 몫이다.
+private 스택과 private-whitelist 스택의 차이는 아래 매개변수 2개로만 표현된다.
+  platformSubnets     : NSG를 연결할 수 없는 서브넷(AzureFirewallSubnet 등)을 추가로 만든다.
+                        private 스택은 빈 배열을 넘기고,
+                        private-whitelist 스택은 방화벽용 서브넷을 넘긴다.
+  jumpboxRouteTableId : 점프박스 서브넷에 연결할 Route Table 의 리소스 ID.
+                        private 스택은 빈 문자열을 넘겨 인터넷으로 바로 나가게 하고,
+                        private-whitelist 스택은 "0.0.0.0/0 -> 방화벽" 경로를 넘긴다.
+
+NSG 규칙은 IP 대역과 포트(OSI 3~4계층) 수준까지만 허용 범위를 정한다.
+도메인 이름(FQDN) 단위의 통제는 이 모듈이 아니라 Azure Firewall 이 담당한다.
 '''
 
 import { subnetConfig } from '../network/vnet.bicep'
@@ -127,7 +138,7 @@ var privateDnsZoneNames = [
 ]
 
 // ---------------------------------------------------------------------------
-// NSG - 모든 서브넷에 연결, deny-all 기준선 위에 최소 허용만 얹는다
+// NSG - 모든 서브넷에 연결한다. 기본은 전부 차단(deny-all)이고, 필요한 통신만 규칙으로 허용한다.
 // ---------------------------------------------------------------------------
 
 // Azure Bastion이 동작하기 위해 반드시 필요한 규칙 집합.
@@ -264,9 +275,9 @@ var privateEndpointNsgRules = [
   }
 ]
 
-// NSG는 next hop이 아니라 패킷의 원래 목적지로 평가된다.
-// 따라서 UDR로 방화벽에 보내는 트래픽도 NSG에서는 원래 목적지(Internet 등)로 허용해야 한다.
-// L4 허용은 여기서 넓게 두고, FQDN 화이트리스트는 방화벽이 담당한다.
+// NSG 규칙은 라우팅으로 결정된 다음 홉(next hop)이 아니라, 패킷에 적힌 원래 목적지를 기준으로 평가된다.
+// 따라서 Route Table 로 방화벽에 보내는 트래픽이라도 NSG에서는 원래 목적지(Internet 등)를 허용해야 통과한다.
+// 여기서는 포트 수준까지만 허용하고, 어떤 도메인으로 나갈 수 있는지는 Azure Firewall 이 통제한다.
 var jumpboxNsgRules = [
   {
     name: 'AllowBastionInbound'
@@ -509,7 +520,7 @@ module jumpbox '../compute/jumpbox.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// RBAC - keyless 접근의 유일한 통로
+// RBAC - API 키를 쓰지 않으므로, Foundry 호출 권한은 역할 할당으로만 부여된다
 // ---------------------------------------------------------------------------
 
 var labUserAssignments roleAssignmentConfig[] = empty(labUserPrincipalId) ? [] : [
