@@ -37,6 +37,11 @@ PRINCIPAL_ID ?=
 # 셸 히스토리에 남기지 않으려면 인자로 넘기지 말고 입력 프롬프트를 쓰는 편이 낫다.
 VM_ADMIN_PASSWORD ?=
 
+# 점프박스 VM 크기. 비우면 템플릿 기본값(Standard_D2s_v5)을 쓴다.
+# 리전에 따라 특정 크기의 용량이 부족해 SkuNotAvailable 로 실패할 수 있다.
+# 그때는 make vm-sizes 로 쓸 수 있는 크기를 확인해 지정한다.
+VM_SIZE ?=
+
 # 삭제 타겟의 안전장치. destroy-* 는 CONFIRM=yes 없이는 동작하지 않는다.
 CONFIRM ?=
 
@@ -46,6 +51,9 @@ CONFIRM ?=
 
 IP_LOOKUP_URL := https://ifconfig.me
 SYSTEMS       := public private private-whitelist
+
+# VM_SIZE 가 비어 있으면 매개변수 자체를 넘기지 않아 템플릿 기본값이 쓰인다.
+VM_SIZE_PARAM = $(if $(VM_SIZE),vmSize=$(VM_SIZE))
 
 # 공인 IP 를 $$CLIENT_IP 에 채운다.
 define resolve_client_ip
@@ -184,7 +192,8 @@ deploy-private: login
 	  --parameters resourceGroupBaseName=$(RGBASENAME) \
 	               location=$(REGION) \
 	               labUserPrincipalId="$$PRINCIPAL_ID" \
-	               vmAdminPassword="$$VM_PASSWORD"
+	               vmAdminPassword="$$VM_PASSWORD" \
+	               $(VM_SIZE_PARAM)
 
 .PHONY: whatif-private
 whatif-private: login
@@ -197,7 +206,8 @@ whatif-private: login
 	  --parameters resourceGroupBaseName=$(RGBASENAME) \
 	               location=$(REGION) \
 	               labUserPrincipalId="$$PRINCIPAL_ID" \
-	               vmAdminPassword="$$VM_PASSWORD"
+	               vmAdminPassword="$$VM_PASSWORD" \
+	               $(VM_SIZE_PARAM)
 
 .PHONY: verify-private
 verify-private:
@@ -224,7 +234,8 @@ deploy-private-whitelist: login
 	  --parameters resourceGroupBaseName=$(RGBASENAME) \
 	               location=$(REGION) \
 	               labUserPrincipalId="$$PRINCIPAL_ID" \
-	               vmAdminPassword="$$VM_PASSWORD"
+	               vmAdminPassword="$$VM_PASSWORD" \
+	               $(VM_SIZE_PARAM)
 	@$(MAKE) --no-print-directory verify-private-whitelist
 
 .PHONY: whatif-private-whitelist
@@ -238,7 +249,8 @@ whatif-private-whitelist: login
 	  --parameters resourceGroupBaseName=$(RGBASENAME) \
 	               location=$(REGION) \
 	               labUserPrincipalId="$$PRINCIPAL_ID" \
-	               vmAdminPassword="$$VM_PASSWORD"
+	               vmAdminPassword="$$VM_PASSWORD" \
+	               $(VM_SIZE_PARAM)
 
 # FIREWALL_ROUTE_IS_VALID 가 false 이면 Route Table 에 적어 둔 다음 홉 주소와
 # 실제 방화벽 사설 IP 가 어긋난 상태다. 이 경우 아웃바운드가 방화벽을 우회한다.
@@ -253,6 +265,20 @@ verify-private-whitelist:
 	@echo "허용 FQDN 개수:"
 	@az deployment sub show --name $(RGBASENAME)-private-whitelist \
 	  --query properties.outputs.ALLOWED_FQDN_COUNT.value -o tsv
+
+# ---------------------------------------------------------------------------
+# 리전에서 쓸 수 있는 VM 크기 확인
+# ---------------------------------------------------------------------------
+
+# SkuNotAvailable 로 배포가 실패하면 여기서 크기를 고른 뒤
+# make deploy-private VM_SIZE=<크기> 로 다시 배포한다.
+# restrictions 가 비어 있는 크기만 출력한다. 구독·리전마다 결과가 다르다.
+.PHONY: vm-sizes
+vm-sizes: login
+	@echo "$(REGION) 에서 쓸 수 있는 2 vCPU D 계열 크기:"
+	@az vm list-skus --location $(REGION) --resource-type virtualMachines \
+	  --size Standard_D2 \
+	  --query '[?length(restrictions) == `0`].name' -o tsv | sort
 
 # ---------------------------------------------------------------------------
 # 출력값 전체 보기

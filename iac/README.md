@@ -147,6 +147,24 @@ make deploy-private-whitelist  # 시스템 3 (배포 후 검증까지 자동 실
 출력값 전체는 `make outputs-public`입니다. 삭제는 실수를 막기 위해
 `make destroy-public CONFIRM=yes`처럼 `CONFIRM=yes`가 있어야 동작합니다.
 
+#### SkuNotAvailable로 실패할 때
+
+점프박스 VM 크기는 리전과 구독에 따라 용량이 부족할 수 있습니다.
+
+```
+SkuNotAvailable: Following SKUs have failed for Capacity Restrictions:
+Standard_D2s_v5 is currently not available in location 'eastus2'
+```
+
+이 오류가 나면 해당 리전에서 실제로 쓸 수 있는 크기를 확인해 지정합니다.
+
+```bash
+make vm-sizes REGION=eastus2                            # 제한 없는 크기 목록
+make deploy-private REGION=eastus2 VM_SIZE=Standard_D2s_v7
+```
+
+템플릿 기본값은 `Standard_D2s_v5`이며, 리전을 바꾸는 것도 방법입니다.
+
 ### Azure Developer CLI(azd)로 배포하기
 
 각 시스템 디렉터리가 독립된 azd 프로젝트입니다. 해당 폴더로 이동해 실행합니다.
