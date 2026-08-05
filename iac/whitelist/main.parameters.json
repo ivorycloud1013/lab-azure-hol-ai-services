@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "privateVnetResourceGroupName": {
+      "value": "${PRIVATE_RESOURCE_GROUP}"
+    },
+    "privateVnetName": {
+      "value": "${PRIVATE_VNET_NAME}"
+    },
+    "expectedFirewallPrivateIp": {
+      "value": "${EXPECTED_FIREWALL_PRIVATE_IP=}"
+    },
+    "firewallSkuTier": {
+      "value": "${FIREWALL_SKU_TIER=Basic}"
+    },
+    "threatIntelMode": {
+      "value": "${THREAT_INTEL_MODE=Alert}"
+    },
+    "deployLogAnalytics": {
+      "value": "${DEPLOY_LOG_ANALYTICS=true}"
+    },
+    "existingLogAnalyticsWorkspaceId": {
+      "value": "${EXISTING_LOG_ANALYTICS_WORKSPACE_ID=}"
+    }
+  }
+}

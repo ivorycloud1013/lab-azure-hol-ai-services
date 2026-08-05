@@ -1,37 +1,32 @@
 metadata description = '''
-Private 망 존. "Azure조차 기본 차단, 화이트리스트로만 뚫는다"를 구현한다.
+Private 망 리소스 (리소스 그룹 범위).
 
-접근 경로: 실습자 노트북 -> Azure Bastion -> 점프박스 VM -> Private Endpoint -> Foundry
-
-3중 통제
+이 스택이 담당하는 통제 2가지 (3번째인 방화벽은 whitelist 스택 소유)
   1) NSG          : 모든 서브넷에 연결, 우선순위 4096 deny-all 기준선.
-                    명시적으로 허용한 출발지/목적지/포트만 통과한다.
-  2) Azure Firewall: 워크로드 서브넷의 0.0.0.0/0을 UDR로 강제 터널링하고,
-                    L7 FQDN 화이트리스트로 아웃바운드를 통제한다.
-  3) 서비스 방화벽 : Foundry는 publicNetworkAccess=Disabled, networkAcls bypass=None.
+  2) 서비스 방화벽 : Foundry는 publicNetworkAccess=Disabled, networkAcls bypass=None.
                     "신뢰할 수 있는 Azure 서비스"도 우회하지 못하고 Private Endpoint로만 접근한다.
 
 NSG 예외
   AzureFirewallSubnet 과 AzureFirewallManagementSubnet 은 Azure 플랫폼이 NSG 연결을
-  지원하지 않는다. 이 두 개가 "모든 서브넷에 NSG" 기준의 유일한 예외이며,
+  지원하지 않는다. 이 둘이 "모든 서브넷에 NSG" 기준의 유일한 예외이며,
   subnetsWithoutNsg 출력으로 예외 목록이 드러난다.
+  두 서브넷은 여기서 자리만 잡아 두고, 실제 방화벽은 whitelist 스택이 채운다.
 
 UDR next hop
   Azure Firewall은 전용 AzureFirewallSubnet에서 항상 첫 할당 가능 주소(x.x.x.4)를 받는다.
   (.0 네트워크 / .1 게이트웨이 / .2 .3 Azure 예약)
-  따라서 cidrHost(prefix, 3)으로 계산해 방화벽 생성 전에 Route Table을 만들 수 있고,
-  VNet <-> Firewall <-> RouteTable 간 순환 의존을 피한다.
-  계산값과 실제값은 firewallPrivateIpMatchesRoute 출력으로 검증한다.
+  cidrHost(prefix, 3)으로 계산하므로 방화벽이 아직 없어도 Route Table을 만들 수 있고,
+  그래서 이 스택이 whitelist 스택과 독립적으로 배포된다.
 '''
 
-import { subnetConfig } from '../network/vnet.bicep'
-import { modelDeploymentConfig } from '../ai/model-deployments.bicep'
-import { roleAssignmentConfig } from '../identity/foundry-role-assignments.bicep'
+import { subnetConfig } from '../modules/network/vnet.bicep'
+import { modelDeploymentConfig } from '../modules/ai/model-deployments.bicep'
+import { roleAssignmentConfig } from '../modules/identity/foundry-role-assignments.bicep'
 import {
   COGNITIVE_SERVICES_USER_ROLE_ID
   COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID
   AZURE_AI_DEVELOPER_ROLE_ID
-} from '../identity/role-definitions.bicep'
+} from '../modules/identity/role-definitions.bicep'
 
 @description('리소스 이름 접두사')
 param namePrefix string
@@ -46,35 +41,31 @@ param location string
 param tags object = {}
 
 @description('Private VNet 주소 공간')
-param vnetAddressPrefix string = '10.20.0.0/16'
+param vnetAddressPrefix string
 
 @description('AzureFirewallSubnet CIDR. /26 이상이어야 한다.')
-param firewallSubnetPrefix string = '10.20.0.0/26'
+param firewallSubnetPrefix string
 
-@description('AzureFirewallManagementSubnet CIDR. Basic SKU에서 필수다.')
-param firewallManagementSubnetPrefix string = '10.20.0.64/26'
+@description('AzureFirewallManagementSubnet CIDR')
+param firewallManagementSubnetPrefix string
+
+@description('AzureFirewallManagementSubnet을 만들지 여부. Azure Firewall Basic SKU에서 필수다.')
+param deployFirewallManagementSubnet bool = true
 
 @description('AzureBastionSubnet CIDR. /26 이상이어야 한다.')
-param bastionSubnetPrefix string = '10.20.0.128/26'
+param bastionSubnetPrefix string
 
 @description('Private Endpoint 서브넷 CIDR')
-param privateEndpointSubnetPrefix string = '10.20.1.0/24'
+param privateEndpointSubnetPrefix string
 
 @description('점프박스 서브넷 CIDR')
-param jumpboxSubnetPrefix string = '10.20.2.0/24'
-
-@description('Azure Firewall SKU. Basic은 관리 서브넷과 공인 IP가 추가로 필요하다.')
-@allowed(['Basic', 'Standard', 'Premium'])
-param firewallSkuTier string = 'Basic'
+param jumpboxSubnetPrefix string
 
 @description('Azure Bastion SKU')
 @allowed(['Basic', 'Standard'])
 param bastionSkuName string = 'Basic'
 
-@description('방화벽 FQDN 화이트리스트에 추가할 도메인')
-param additionalAllowedFqdns string[] = []
-
-@description('Private Endpoint 서브넷에 NSG/UDR을 적용할지 여부. Enabled면 NSG가 PE 트래픽에도 적용된다.')
+@description('Private Endpoint 서브넷에 NSG를 적용할지 여부')
 @allowed(['Enabled', 'Disabled'])
 param privateEndpointNetworkPolicies string = 'Enabled'
 
@@ -120,7 +111,6 @@ var bastionSubnetName = 'AzureBastionSubnet'
 var firewallSubnetName = 'AzureFirewallSubnet'
 var firewallManagementSubnetName = 'AzureFirewallManagementSubnet'
 
-var requiresFirewallManagementSubnet = firewallSkuTier == 'Basic'
 var firewallPrivateIpAddress = cidrHost(firewallSubnetPrefix, FIREWALL_HOST_INDEX)
 
 // Foundry Private Endpoint 이름 해석에 필요한 존. AI Foundry는 세 개 모두 필요하다.
@@ -270,7 +260,7 @@ var privateEndpointNsgRules = [
 
 // NSG는 next hop이 아니라 패킷의 원래 목적지로 평가된다.
 // 따라서 UDR로 방화벽에 보내는 트래픽도 NSG에서는 원래 목적지(Internet 등)로 허용해야 한다.
-// L4 허용은 여기서 넓게 두고, 실제 FQDN 화이트리스트는 Azure Firewall이 담당한다.
+// L4 허용은 여기서 넓게 두고, 실제 FQDN 화이트리스트는 whitelist 스택의 방화벽이 담당한다.
 var jumpboxNsgRules = [
   {
     name: 'AllowBastionInbound'
@@ -330,7 +320,7 @@ var jumpboxNsgRules = [
   }
 ]
 
-module bastionNsg '../network/nsg.bicep' = {
+module bastionNsg '../modules/network/nsg.bicep' = {
   name: 'private-nsg-bastion'
   params: {
     name: 'nsg-${namePrefix}-private-bastion'
@@ -342,7 +332,7 @@ module bastionNsg '../network/nsg.bicep' = {
   }
 }
 
-module privateEndpointNsg '../network/nsg.bicep' = {
+module privateEndpointNsg '../modules/network/nsg.bicep' = {
   name: 'private-nsg-pe'
   params: {
     name: 'nsg-${namePrefix}-private-pe'
@@ -354,7 +344,7 @@ module privateEndpointNsg '../network/nsg.bicep' = {
   }
 }
 
-module jumpboxNsg '../network/nsg.bicep' = {
+module jumpboxNsg '../modules/network/nsg.bicep' = {
   name: 'private-nsg-jumpbox'
   params: {
     name: 'nsg-${namePrefix}-private-jumpbox'
@@ -367,10 +357,10 @@ module jumpboxNsg '../network/nsg.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Route Table - 방화벽보다 먼저 만들어 순환 의존을 끊는다
+// Route Table - 방화벽이 아직 없어도 만들 수 있게 next hop을 계산으로 구한다
 // ---------------------------------------------------------------------------
 
-module jumpboxRouteTable '../network/route-table.bicep' = {
+module jumpboxRouteTable '../modules/network/route-table.bicep' = {
   name: 'private-route-table-jumpbox'
   params: {
     name: 'rt-${namePrefix}-private-jumpbox'
@@ -382,7 +372,7 @@ module jumpboxRouteTable '../network/route-table.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// VNet
+// VNet - 방화벽 서브넷 자리까지 여기서 정의한다 (whitelist 스택이 채워 넣는다)
 // ---------------------------------------------------------------------------
 
 // AzureFirewallSubnet / AzureFirewallManagementSubnet은 NSG 연결이 플랫폼 차원에서
@@ -395,7 +385,7 @@ var firewallSubnets subnetConfig[] = concat(
       networkSecurityGroupId: ''
     }
   ],
-  requiresFirewallManagementSubnet
+  deployFirewallManagementSubnet
     ? [
         {
           name: firewallManagementSubnetName
@@ -427,7 +417,7 @@ var managedSubnets subnetConfig[] = [
   }
 ]
 
-module vnet '../network/vnet.bicep' = {
+module vnet '../modules/network/vnet.bicep' = {
   name: 'private-vnet'
   params: {
     name: 'vnet-${namePrefix}-private'
@@ -439,42 +429,10 @@ module vnet '../network/vnet.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Azure Firewall - L7 FQDN 화이트리스트
-// ---------------------------------------------------------------------------
-
-module firewallPolicy '../network/firewall-policy.bicep' = {
-  name: 'private-firewall-policy'
-  params: {
-    name: 'afwp-${namePrefix}-private'
-    location: location
-    tags: tags
-    skuTier: firewallSkuTier
-    sourceAddresses: [jumpboxSubnetPrefix]
-    additionalAllowedFqdns: additionalAllowedFqdns
-  }
-}
-
-module firewall '../network/firewall.bicep' = {
-  name: 'private-firewall'
-  params: {
-    name: 'afw-${namePrefix}-private'
-    location: location
-    tags: tags
-    skuTier: firewallSkuTier
-    subnetId: vnet.outputs.subnetIds[firewallSubnetName]
-    managementSubnetId: requiresFirewallManagementSubnet
-      ? vnet.outputs.subnetIds[firewallManagementSubnetName]
-      : ''
-    firewallPolicyId: firewallPolicy.outputs.id
-    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Azure Bastion
 // ---------------------------------------------------------------------------
 
-module bastion '../network/bastion.bicep' = {
+module bastion '../modules/network/bastion.bicep' = {
   name: 'private-bastion'
   params: {
     name: 'bas-${namePrefix}-private'
@@ -490,7 +448,7 @@ module bastion '../network/bastion.bicep' = {
 // Private DNS
 // ---------------------------------------------------------------------------
 
-module privateDnsZones '../network/private-dns-zone.bicep' = [
+module privateDnsZones '../modules/network/private-dns-zone.bicep' = [
   for zoneName in privateDnsZoneNames: {
     name: 'private-dns-${replace(zoneName, '.', '-')}'
     params: {
@@ -507,7 +465,7 @@ module privateDnsZones '../network/private-dns-zone.bicep' = [
 
 var foundryAccountName = 'aif-${namePrefix}-prv-${resourceToken}'
 
-module foundry '../ai/foundry-account.bicep' = {
+module foundry '../modules/ai/foundry-account.bicep' = {
   name: 'private-foundry-account'
   params: {
     name: foundryAccountName
@@ -524,7 +482,7 @@ module foundry '../ai/foundry-account.bicep' = {
   }
 }
 
-module foundryPrivateEndpoint '../network/private-endpoint.bicep' = {
+module foundryPrivateEndpoint '../modules/network/private-endpoint.bicep' = {
   name: 'private-foundry-pe'
   params: {
     name: 'pe-${foundryAccountName}'
@@ -539,7 +497,7 @@ module foundryPrivateEndpoint '../network/private-endpoint.bicep' = {
   }
 }
 
-module project '../ai/foundry-project.bicep' = {
+module project '../modules/ai/foundry-project.bicep' = {
   name: 'private-foundry-project'
   params: {
     accountName: foundry.outputs.name
@@ -551,7 +509,7 @@ module project '../ai/foundry-project.bicep' = {
   }
 }
 
-module deployments '../ai/model-deployments.bicep' = {
+module deployments '../modules/ai/model-deployments.bicep' = {
   name: 'private-foundry-deployments'
   params: {
     accountName: foundry.outputs.name
@@ -566,7 +524,7 @@ module deployments '../ai/model-deployments.bicep' = {
 // 점프박스
 // ---------------------------------------------------------------------------
 
-module jumpbox '../compute/jumpbox.bicep' = {
+module jumpbox '../modules/compute/jumpbox.bicep' = {
   name: 'private-jumpbox'
   params: {
     // Windows 컴퓨터 이름은 15자를 넘을 수 없다.
@@ -620,7 +578,7 @@ var jumpboxAssignments roleAssignmentConfig[] = [
   }
 ]
 
-module roleAssignments '../identity/foundry-role-assignments.bicep' = {
+module roleAssignments '../modules/identity/foundry-role-assignments.bicep' = {
   name: 'private-foundry-roles'
   params: {
     accountName: foundry.outputs.name
@@ -635,23 +593,14 @@ module roleAssignments '../identity/foundry-role-assignments.bicep' = {
 @description('Private VNet 리소스 ID')
 output vnetId string = vnet.outputs.id
 
+@description('Private VNet 이름. whitelist 스택이 방화벽을 넣을 대상이다.')
+output vnetName string = vnet.outputs.name
+
 @description('NSG가 연결되지 않은 서브넷 목록. NSG를 지원하지 않는 방화벽 서브넷만 나와야 한다.')
 output subnetsWithoutNsg string[] = vnet.outputs.subnetsWithoutNsg
 
-@description('Azure Firewall 이름')
-output firewallName string = firewall.outputs.name
-
-@description('UDR에 설정한 방화벽 IP (배포 전 계산값)')
+@description('Route Table에 설정한 방화벽 IP. whitelist 스택이 이 값과 일치하는지 검증한다.')
 output routeNextHopIpAddress string = firewallPrivateIpAddress
-
-@description('Azure Firewall의 실제 사설 IP')
-output firewallPrivateIpAddress string = firewall.outputs.privateIpAddress
-
-@description('계산한 UDR next hop이 실제 방화벽 IP와 일치하는지 여부. false면 강제 터널링이 끊긴 상태다.')
-output firewallPrivateIpMatchesRoute bool = firewall.outputs.privateIpAddress == firewallPrivateIpAddress
-
-@description('방화벽 아웃바운드 공인 IP')
-output firewallPublicIpAddress string = firewall.outputs.publicIpAddress
 
 @description('Azure Bastion 이름')
 output bastionName string = bastion.outputs.name

@@ -1,182 +1,223 @@
-# IaC — Azure AI Foundry HOL 이중망 랜딩존
+# IaC — Azure AI Foundry HOL
 
-Azure AI Foundry를 **Public 망**과 **Private 망** 두 벌로 배포하고, 두 망의 접근 통제 차이를
-실습으로 비교할 수 있게 만든 Bicep 템플릿이다. 인증은 양쪽 모두 **keyless(Entra ID + RBAC)** 다.
+**서로 독립된 3개 시스템**으로 구성했다. 각 스택은 자기 리소스 그룹만 만들고, 자기 IaC 루트를 가지며,
+따로 배포·갱신·삭제된다. 하나를 지워도 나머지는 살아 있다.
+
+| 스택 | 리소스 그룹 | 소유하는 것 | 다른 스택 의존 |
+|---|---|---|---|
+| [`public/`](public/) | `rg-<env>-public` | Public VNet, Foundry(공용+IP 화이트리스트), 모델, RBAC | **없음** |
+| [`private/`](private/) | `rg-<env>-private` | Private VNet, NSG, UDR, Bastion, 점프박스, Foundry(비공개)+PE+DNS, NSG 정책 | **없음** |
+| [`whitelist/`](whitelist/) | `rg-<env>-whitelist` | Firewall Policy(FQDN 화이트리스트), Azure Firewall | `private` 먼저 |
+
+```
+┌─ 스택 1 ─────────────┐   ┌─ 스택 2 ────────────────────┐   ┌─ 스택 3 ─────────┐
+│ rg-<env>-public      │   │ rg-<env>-private            │   │ rg-<env>-whitelist│
+│                      │   │                             │   │                   │
+│ vnet 10.10.0.0/16    │   │ vnet 10.20.0.0/16           │◀──│ Azure Firewall    │
+│ Foundry (Enabled)    │   │  ├ AzureFirewallSubnet ─────┼───│  (서브넷만 빌려씀) │
+│  defaultAction=Deny  │   │  ├ AzureBastionSubnet       │   │ Firewall Policy   │
+│  ipRules=노트북 IP    │   │  ├ snet-private-endpoint    │   │  FQDN 화이트리스트 │
+│                      │   │  └ snet-jumpbox ─UDR→.4 ────┼──▶│                   │
+│ 노트북에서 직접 호출   │   │ Bastion → 점프박스 → PE      │   │ Log Analytics     │
+└──────────────────────┘   │ Foundry (Disabled, bypass=None)│└───────────────────┘
+                           └─────────────────────────────┘
+```
+
+**스택 간 결합은 단 하나** — Azure Firewall은 반드시 보호 대상 VNet의 `AzureFirewallSubnet`에 있어야 한다.
+그래서 whitelist 스택은 private 스택이 만들어 둔 서브넷을 이름으로 참조한다(방화벽 리소스 자체는 자기 RG에 생성됨).
+private 스택의 UDR next hop은 방화벽 IP를 `cidrHost()`로 **미리 계산**해 두므로, private은 방화벽 없이도 단독 배포된다.
 
 ---
 
-## 1. 아키텍처
-
-```
-                        ┌───────────────────────────────────────────────┐
-   실습자 노트북 ──HTTPS─▶│ Public 망 (rg-<env>-public)                   │
-        │                │                                               │
-        │                │  Foundry (publicNetworkAccess=Enabled)        │
-        │                │    networkAcls.defaultAction = Deny           │
-        │                │    ├─ ipRules          = 노트북 공인 IP        │
-        │                │    └─ virtualNetworkRules = snet-workload     │
-        │                │  disableLocalAuth = true  (API 키 없음)        │
-        │                │                                               │
-        │                │  vnet 10.10.0.0/16                            │
-        │                │    └ snet-workload 10.10.1.0/24 + NSG(deny-all)│
-        │                └───────────────────────────────────────────────┘
-        │
-        │                ┌───────────────────────────────────────────────┐
-        └──HTTPS(443)───▶│ Private 망 (rg-<env>-private)                 │
-             Bastion     │                                               │
-                         │  vnet 10.20.0.0/16                            │
-                         │   ├ AzureFirewallSubnet        10.20.0.0/26   │  NSG 불가(플랫폼 예외)
-                         │   ├ AzureFirewallManagementSub 10.20.0.64/26  │  NSG 불가(플랫폼 예외)
-                         │   ├ AzureBastionSubnet         10.20.0.128/26 │  NSG + deny-all
-                         │   ├ snet-private-endpoint      10.20.1.0/24   │  NSG + deny-all
-                         │   └ snet-jumpbox               10.20.2.0/24   │  NSG + deny-all + UDR
-                         │                                               │
-                         │  Bastion ─▶ 점프박스 VM (공인 IP 없음)          │
-                         │                │                              │
-                         │                ├─▶ Private Endpoint ─▶ Foundry│
-                         │                │      (publicNetworkAccess=Disabled)
-                         │                │      (networkAcls.bypass=None)
-                         │                │                              │
-                         │                └─▶ 0.0.0.0/0 (UDR)            │
-                         │                     ─▶ Azure Firewall         │
-                         │                          FQDN 화이트리스트      │
-                         │                          그 외 전부 Deny        │
-                         └───────────────────────────────────────────────┘
-```
-
-### 3중 통제 (Private 망)
-
-| 계층 | 수단 | 통제 내용 |
-|---|---|---|
-| L3/L4 | NSG | 모든 서브넷에 연결. 우선순위 **4096 deny-all**이 기본이고 명시 허용만 통과 |
-| L7 | Azure Firewall | UDR로 강제 터널링. **FQDN 화이트리스트**만 허용, 나머지 명시적 Deny |
-| 서비스 | Foundry 방화벽 | `publicNetworkAccess=Disabled` + `networkAcls.bypass=None`. Private Endpoint가 유일한 경로 |
-
-`bypass=None` 이므로 "신뢰할 수 있는 Azure 서비스"조차 우회하지 못한다.
-요구사항이었던 **"Azure도 막고 화이트리스트로만 뚫는다"** 를 구현한 부분이다.
-
----
-
-## 2. 폴더 구조
-
-```
-iac/
-├── main.bicep                 구독 범위 오케스트레이터. RG 3개 생성 후 존 모듈 호출
-├── main.parameters.json       azd 파라미터 바인딩
-└── modules/
-    ├── network/
-    │   ├── nsg.bicep                deny-all 기준선(4096) 자동 부착
-    │   ├── vnet.bicep               subnetConfig 타입으로 NSG 필수화
-    │   ├── route-table.bicep        0.0.0.0/0 → 방화벽 강제 터널링
-    │   ├── firewall-policy.bicep    FQDN/서비스태그 화이트리스트 + 명시 Deny-All
-    │   ├── firewall.bicep           Azure Firewall (Basic은 관리 서브넷 필요)
-    │   ├── bastion.bicep            Azure Bastion
-    │   ├── private-dns-zone.bicep   privatelink 존 + VNet 링크
-    │   └── private-endpoint.bicep   PE + DNS Zone Group
-    ├── ai/
-    │   ├── foundry-account.bicep    keyless 계정 (disableLocalAuth + networkAcls)
-    │   ├── foundry-project.bicep    Foundry 프로젝트
-    │   └── model-deployments.bicep  모델 배포 (@batchSize(1) 순차)
-    ├── compute/
-    │   └── jumpbox.bicep            공인 IP 없는 Windows 점프박스 + 관리 ID
-    ├── identity/
-    │   ├── role-definitions.bicep   역할 GUID 상수
-    │   └── foundry-role-assignments.bicep
-    ├── monitor/
-    │   └── log-analytics.bicep      방화벽/NSG/Foundry 진단 로그 수집
-    ├── governance/
-    │   ├── subnet-nsg-policy.bicep  "모든 서브넷 NSG 필수" 커스텀 정책
-    │   └── policy-assignment.bicep  RG 범위 할당(스코프 분리용)
-    └── zones/
-        ├── public-zone.bicep        Public 망 조립
-        └── private-zone.bicep       Private 망 조립
-```
-
----
-
-## 3. 사전 준비
+## 배포
 
 ```bash
 az login
-az account set --subscription <구독 ID>
-
-# 노트북 공인 IP 확인 (Public Foundry 화이트리스트에 등록됨)
-curl -s ifconfig.me
+export ENV=hol01
+export LOC=westus3
 ```
 
-필요 권한: 구독 **Owner** 또는 (Contributor + User Access Administrator).
-RBAC 역할 할당과 Azure Policy 정의를 만들기 때문이다.
-
----
-
-## 4. 배포
-
-### azd 사용 (권장)
+### 스택 1 — Public (독립, 언제든)
 
 ```bash
-azd auth login
-azd env new hol01
-azd env set LAB_CLIENT_IP        "$(curl -s ifconfig.me)"
-azd env set VM_ADMIN_PASSWORD    '<12자 이상 복잡한 비밀번호>'
-azd up
-```
-
-`labUserPrincipalId`는 azd가 `AZURE_PRINCIPAL_ID`로 로그인 사용자를 자동 주입한다.
-
-### az CLI 사용
-
-```bash
-az deployment sub create \
-  --name hol-deploy \
-  --location westus3 \
-  --template-file iac/main.bicep \
-  --parameters environmentName=hol01 \
-               location=westus3 \
+az deployment sub create -n $ENV-public -l $LOC \
+  --template-file iac/public/main.bicep \
+  --parameters environmentName=$ENV location=$LOC \
                labClientIpAddress="$(curl -s ifconfig.me)" \
+               labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
+```
+
+### 스택 2 — Private
+
+```bash
+az deployment sub create -n $ENV-private -l $LOC \
+  --template-file iac/private/main.bicep \
+  --parameters environmentName=$ENV location=$LOC \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
-               vmAdminPassword='<비밀번호>'
+               vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 ```
 
-배포 전에 변경분만 미리 보려면:
+이 시점에서 점프박스는 **아웃바운드가 블랙홀**이다. UDR이 아직 존재하지 않는 방화벽을 가리키기 때문이다.
+Bastion 서브넷에는 UDR을 걸지 않으므로 **접속은 된다.** 실습에서 "차단된 상태"를 먼저 보여주기 좋은 지점이다.
+
+### 스택 3 — Whitelist
+
+private 스택의 출력을 그대로 입력으로 넘긴다.
 
 ```bash
-az deployment sub what-if --location westus3 --template-file iac/main.bicep --parameters ...
+PRV=$(az deployment sub show -n $ENV-private --query properties.outputs -o json)
+
+az deployment sub create -n $ENV-whitelist -l $LOC \
+  --template-file iac/whitelist/main.bicep \
+  --parameters environmentName=$ENV location=$LOC \
+               privateVnetResourceGroupName=$(echo $PRV | jq -r .PRIVATE_RESOURCE_GROUP.value) \
+               privateVnetName=$(echo $PRV | jq -r .PRIVATE_VNET_NAME.value) \
+               expectedFirewallPrivateIp=$(echo $PRV | jq -r .EXPECTED_FIREWALL_PRIVATE_IP.value)
 ```
 
-### 주요 매개변수
+배포 후 반드시 확인한다.
 
-| 매개변수 | 기본값 | 설명 |
-|---|---|---|
-| `location` | `westus3` | `westus3` / `eastus2` / `swedencentral` / `koreacentral`. 기본 모델의 GA 가용을 `az cognitiveservices model list`로 확인한 리전 |
-| `firewallSkuTier` | `Basic` | Basic이 가장 저렴. Standard는 관리 서브넷 불필요 |
-| `bastionSkuName` | `Basic` | Standard로 올리면 네이티브 클라이언트/터널링 사용 가능 |
-| `deployPublicZone` / `deployPrivateZone` | `true` | 한쪽만 배포해 비용 절감 가능 |
-| `deployLogAnalytics` | `true` | 방화벽 차단 로그 확인에 필요 |
-| `subnetNsgPolicyEffect` | `Audit` | `Deny`로 올리면 NSG 없는 서브넷 생성 자체를 차단 |
-| `additionalAllowedFqdns` | `[]` | 방화벽 화이트리스트 확장 |
-| `modelDeployments` | gpt-5.4-mini 20 TPM | 배포할 모델 목록. 아래 "모델 선택" 주의사항 참고 |
+```bash
+az deployment sub show -n $ENV-whitelist --query properties.outputs.FIREWALL_ROUTE_IS_VALID.value
+# true 여야 한다. false면 UDR next hop과 실제 방화벽 IP가 어긋난 상태다.
+```
+
+### azd로 배포하기
+
+각 스택 디렉터리가 독립된 azd 프로젝트다. 해당 폴더로 이동해서 실행한다.
+
+```bash
+cd iac/private && azd env new hol01 && azd env set VM_ADMIN_PASSWORD '<비밀번호>' && azd up
+cd ../whitelist && azd env new hol01 && azd env set PRIVATE_RESOURCE_GROUP rg-hol01-private \
+  && azd env set PRIVATE_VNET_NAME vnet-hol01-private && azd up
+```
 
 ---
 
-## 5. 배포 직후 확인
+## 화이트리스트만 갱신하기
+
+이 구조의 핵심 이점이다. private 망을 전혀 건드리지 않고 규칙만 다시 민다.
 
 ```bash
-az deployment sub show --name hol-deploy --query properties.outputs -o json
+az deployment sub create -n $ENV-whitelist -l $LOC \
+  --template-file iac/whitelist/main.bicep \
+  --parameters environmentName=$ENV location=$LOC \
+               privateVnetResourceGroupName=rg-$ENV-private \
+               privateVnetName=vnet-$ENV-private \
+               additionalAllowedFqdns='["github.com","*.githubusercontent.com"]'
 ```
 
-반드시 확인할 출력 세 개:
-
-| 출력 | 기대값 | 의미 |
-|---|---|---|
-| `FIREWALL_ROUTE_IS_VALID` | `true` | UDR next hop이 실제 방화벽 IP와 일치. `false`면 강제 터널링이 끊긴 상태 |
-| `PRIVATE_SUBNETS_WITHOUT_NSG` | `["AzureFirewallSubnet","AzureFirewallManagementSubnet"]` | 이 둘 외에 값이 있으면 NSG 누락 |
-| `PUBLIC_SUBNETS_WITHOUT_NSG` | `[]` | 비어 있어야 정상 |
+허용 목록은 `iac/whitelist/main.bicep`의 매개변수로 분류돼 있다 —
+`identityAndManagementFqdns` / `foundryFqdns` / `portalFqdns` / `toolingFqdns` / `additionalAllowedFqdns` /
+`allowedServiceTags` / `allowedFqdnTags`.
 
 ---
 
-## 6. 실습 시나리오
+## 공유 모듈
 
-### 6-1. Public 망 — keyless 호출 (노트북)
+`iac/modules/` 는 세 스택이 함께 쓰는 빌딩 블록이다. **시스템은 분리하되 블록까지 복제하지는 않았다** —
+NSG deny-all 기준선이나 Foundry keyless 설정 같은 규칙이 스택마다 따로 놀면 드리프트가 생기기 때문이다.
+
+```
+modules/
+├── network/    nsg, vnet, route-table, firewall-policy, firewall, bastion,
+│               private-dns-zone, private-endpoint
+├── ai/         foundry-account, foundry-project, model-deployments
+├── compute/    jumpbox
+├── identity/   role-definitions, foundry-role-assignments
+├── monitor/    log-analytics
+└── governance/ subnet-nsg-policy, policy-assignment
+```
+
+---
+
+## 설계 결정과 제약
+
+### NSG 예외는 방화벽 서브넷 두 개뿐
+
+Azure는 `AzureFirewallSubnet` / `AzureFirewallManagementSubnet`에 **NSG 연결을 지원하지 않는다.**
+"모든 서브넷에 NSG" 기준의 유일한 예외이며, `SUBNETS_WITHOUT_NSG` 출력으로 항상 드러나게 했다.
+`AzureBastionSubnet`은 NSG가 **필수**라 문서화된 필수 규칙 8개를 모두 넣었다.
+
+강제 수단은 이중이다. `modules/network/vnet.bicep`의 `subnetConfig` 타입이 `networkSecurityGroupId`를
+필수 필드로 두어 컴파일 시점에 막고, `modules/governance/subnet-nsg-policy.bicep`의 Azure Policy가
+배포 이후 포털/CLI로 추가되는 서브넷을 막는다. 정책 효과는 기본 `Audit`이다 —
+`Deny`로 시작하면 첫 배포가 스스로 막힐 수 있어서, 한 번 배포한 뒤 올리는 것을 권장한다.
+
+### NSG는 next hop이 아니라 원래 목적지로 평가된다
+
+UDR로 0.0.0.0/0을 방화벽에 보내더라도 NSG는 패킷의 **원래 목적지**를 본다.
+"방화벽 서브넷으로의 아웃바운드 허용"만으로는 인터넷 트래픽이 통과하지 못한다.
+점프박스 NSG가 `Internet:80/443`을 L4에서 넓게 허용하고, 실제 FQDN 통제는 whitelist 스택의 방화벽이 맡는 이유다.
+**NSG는 대역·포트, 방화벽은 도메인** — 역할이 다르다.
+
+### UDR next hop을 계산으로 구한 이유
+
+`VNet → Firewall → RouteTable → VNet` 순환 의존을 피하기 위해 `cidrHost(firewallSubnetPrefix, 3)`로 계산한다.
+Azure Firewall은 전용 서브넷에서 항상 첫 할당 가능 주소(`x.x.x.4`)를 받는다
+(`.0` 네트워크 / `.1` 게이트웨이 / `.2` `.3` 예약).
+이 계산 덕분에 **private 스택이 whitelist 스택 없이 단독 배포된다** — 스택 분리를 가능하게 한 핵심이다.
+계산값과 실제값의 일치는 whitelist 스택의 `FIREWALL_ROUTE_IS_VALID` 출력으로 검증한다.
+
+### AzureBastionSubnet에는 UDR을 걸지 않았다
+
+`0.0.0.0/0`을 방화벽으로 보내면 Bastion 제어 평면이 끊겨 세션이 열리지 않는다. 의도적으로 제외했다.
+덕분에 whitelist 스택 배포 전에도 점프박스 접속은 가능하다.
+
+### DNS는 Azure 제공 DNS를 사용한다
+
+Azure Firewall DNS 프록시를 켜면 VNet DNS를 방화벽 IP로 바꿔야 해서 private 스택이 whitelist 스택에
+의존하게 된다. Private Endpoint 이름 해석은 VNet에 링크된 Private DNS Zone만으로 충분하고,
+FQDN 필터링도 **애플리케이션 규칙**에서는 DNS 프록시 없이 동작하므로 켜지 않았다.
+네트워크 규칙에 FQDN을 쓸 때만 필요하다.
+
+### Private Endpoint 서브넷의 `privateEndpointNetworkPolicies=Enabled`
+
+기본값은 `Disabled`(= PE 트래픽에 NSG 미적용)다. deny-all 기준을 PE에도 실제로 적용하기 위해
+`Enabled`로 두고 점프박스 서브넷에서의 443만 명시 허용했다.
+
+### Azure Firewall Basic의 추가 요구사항
+
+Basic SKU는 `AzureFirewallManagementSubnet`과 **별도 공인 IP**를 요구한다.
+서브넷은 private 스택이, 공인 IP는 whitelist 스택이 만든다.
+**두 스택의 설정이 맞아야 한다** — private의 `deployFirewallManagementSubnet`과
+whitelist의 `firewallSkuTier`. Standard/Premium을 쓰려면 private을 `false`로 재배포한다.
+
+### 모델 선택 — `gpt-4.x` 계열은 쓸 수 없다
+
+`az cognitiveservices model list`에 나온다고 배포 가능한 것이 아니다. 목록에는 **Deprecating 상태 모델도
+함께 나오는데**, 이들은 제어 평면 프리플라이트에서 거부된다.
+
+```
+ServiceModelDeprecating - The model 'Format:OpenAI,Name:gpt-4.1-mini,Version:2025-04-14'
+is in deprecating state and cannot be used for new deployments.
+```
+
+`gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` 전부 해당한다.
+기본값을 `gpt-5.4-mini`(2026-03-17, GenerallyAvailable)로 잡은 이유다. 모델을 바꿀 때는 반드시 확인한다.
+
+```bash
+az cognitiveservices model list -l westus3 \
+  --query "[?model.name=='<모델명>'].{v:model.version, ls:model.lifecycleStatus, s:join(',',model.skus[].name)}" -o table
+```
+
+### Log Analytics는 스택마다 별도
+
+스택 독립성을 지키기 위해 각 스택이 자기 작업 영역을 선택적으로 만든다.
+whitelist만 기본 `true`다 — 방화벽 화이트리스트 실습은 무엇이 차단됐는지 못 보면 성립하지 않기 때문이다.
+하나로 합치고 싶으면 `existingLogAnalyticsWorkspaceId`에 기존 작업 영역 ID를 넘기면 된다.
+일일 수집 상한은 1GB로 묶어 두었다.
+
+### `bicepconfig.json`에서 `no-hardcoded-env-urls`를 끈 이유
+
+이 규칙은 하드코딩된 Azure URL을 경고하지만, FQDN 화이트리스트는 `login.microsoftonline.com` 같은 도메인을
+**문자열 그대로 적는 것이 목적**이다. 대신 `no-unused-params` 등 실질적인 규칙은 `error`로 올렸다.
+
+---
+
+## 실습 시나리오
+
+### 1. Public 망 — keyless 호출 (노트북)
 
 ```python
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
@@ -196,39 +237,32 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 ```
 
-- **키가 아예 없다.** `disableLocalAuth=true` 이므로 `az cognitiveservices account keys list`도 실패한다.
-- 노트북을 다른 네트워크(테더링 등)로 옮기면 IP 화이트리스트에서 벗어나 `403`이 난다.
+키가 아예 없다. `disableLocalAuth=true` 라서 `az cognitiveservices account keys list` 도 실패한다.
+노트북을 다른 네트워크로 옮기면 IP 화이트리스트를 벗어나 `403`이 난다.
 
-### 6-2. Private 망 — 노트북에서는 실패해야 정상
+### 2. Private 망 — 노트북에서는 실패해야 정상
 
-같은 코드로 `PRIVATE_FOUNDRY_ENDPOINT`를 호출하면 실패한다.
-`publicNetworkAccess=Disabled`라 공용 경로가 존재하지 않는다.
+같은 코드로 `PRIVATE_FOUNDRY_ENDPOINT`를 호출하면 실패한다. `publicNetworkAccess=Disabled`라 공용 경로가 없다.
 
-### 6-3. Private 망 — Bastion 경유 성공
+### 3. Private 망 — Bastion 경유 성공
 
 ```bash
 az network bastion rdp --name <BASTION_NAME> --resource-group rg-<env>-private \
   --target-resource-id $(az vm show -g rg-<env>-private -n <JUMPBOX_NAME> --query id -o tsv)
 ```
 
-점프박스에서 DNS를 확인하면 사설 IP로 해석된다.
-
 ```powershell
-nslookup <private-foundry>.openai.azure.com     # 10.20.1.x 를 반환해야 정상
+nslookup <private-foundry>.openai.azure.com   # 10.20.1.x 를 반환해야 정상
 ```
 
 `DefaultAzureCredential()`이 VM 관리 ID를 자동으로 집어 키 없이 호출된다.
 
-### 6-4. 방화벽 화이트리스트 체감
-
-점프박스에서 허용/차단 대비를 확인한다.
+### 4. 화이트리스트 체감 — 스택 3의 있고 없음
 
 ```powershell
 Invoke-WebRequest https://login.microsoftonline.com  # 허용 (화이트리스트)
 Invoke-WebRequest https://github.com                 # 차단 (목록에 없음)
 ```
-
-Log Analytics에서 차단 로그를 확인한다.
 
 ```kusto
 AZFWApplicationRule
@@ -237,15 +271,10 @@ AZFWApplicationRule
 | order by TimeGenerated desc
 ```
 
-FQDN을 열어주려면 재배포 없이 매개변수만 확장한다.
+whitelist 스택을 지웠다가(`az group delete -n rg-<env>-whitelist`) 다시 배포하면
+**같은 private 망이 완전 차단 ↔ 화이트리스트 통과 사이를 오간다.** 스택을 나눈 덕에 가능한 시연이다.
 
-```bash
-azd env set ADDITIONAL_ALLOWED_FQDNS '["github.com","*.githubusercontent.com"]'
-```
-
-### 6-5. NSG 거버넌스 확인
-
-정책 준수 상태를 조회한다.
+### 5. NSG 거버넌스 확인
 
 ```bash
 az policy state list --resource-group rg-<env>-private \
@@ -253,150 +282,70 @@ az policy state list --resource-group rg-<env>-private \
   --query "[].{res:resourceId, state:complianceState}" -o table
 ```
 
-`subnetNsgPolicyEffect=Deny`로 올린 뒤 NSG 없는 서브넷 추가를 시도하면 거부된다.
-
 ---
 
-## 7. 설계 결정과 제약
+## 비용
 
-### NSG 예외는 방화벽 서브넷 두 개뿐
+westus3 소매가 기준(USD, 2026-08 Azure Retail Prices API 조회값). 상시 과금 항목만 정리했다.
 
-Azure는 `AzureFirewallSubnet` / `AzureFirewallManagementSubnet`에 **NSG 연결을 지원하지 않는다.**
-"모든 서브넷에 NSG" 기준의 유일한 예외이며, `subnetsWithoutNsg` 출력으로 항상 드러나게 했다.
-`AzureBastionSubnet`은 NSG가 **필수**이므로 문서화된 필수 규칙 8개를 모두 넣었다.
-
-### NSG는 next hop이 아니라 원래 목적지로 평가된다
-
-UDR로 0.0.0.0/0을 방화벽에 보내더라도, NSG는 패킷의 **원래 목적지**를 본다.
-따라서 "방화벽 서브넷으로의 아웃바운드 허용"만으로는 인터넷 트래픽이 통과하지 못한다.
-점프박스 NSG가 `Internet:80/443`을 L4에서 넓게 허용하고, 실제 FQDN 통제는 Azure Firewall이 맡는 이유다.
-NSG는 대역·포트, 방화벽은 도메인 — 역할이 다르다.
-
-### UDR next hop을 계산으로 구한 이유
-
-`VNet → Firewall → RouteTable → VNet` 순환 의존을 피하기 위해,
-방화벽 사설 IP를 `cidrHost(firewallSubnetPrefix, 3)`로 계산해 방화벽보다 **먼저** Route Table을 만든다.
-Azure Firewall은 전용 서브넷에서 항상 첫 할당 가능 주소(`x.x.x.4`)를 받는다(`.0` 네트워크 / `.1` 게이트웨이 / `.2` `.3` 예약).
-계산값과 실제값의 일치 여부는 `FIREWALL_ROUTE_IS_VALID` 출력으로 검증한다.
-
-### AzureBastionSubnet에는 UDR을 걸지 않았다
-
-`0.0.0.0/0`을 방화벽으로 보내면 Bastion 제어 평면이 끊겨 세션이 열리지 않는다. 의도적으로 제외했다.
-
-### DNS는 Azure 제공 DNS를 사용한다
-
-Azure Firewall DNS 프록시를 켜면 VNet DNS를 방화벽 IP로 바꿔야 해서 VNet을 두 번 배포해야 한다.
-Private Endpoint 이름 해석은 VNet에 링크된 Private DNS Zone만으로 충분하고,
-FQDN 필터링도 **애플리케이션 규칙**에서는 DNS 프록시 없이 동작하므로 켜지 않았다.
-네트워크 규칙에 FQDN을 쓰려면 그때 DNS 프록시를 활성화한다.
-
-### Private Endpoint 서브넷의 `privateEndpointNetworkPolicies=Enabled`
-
-기본값은 `Disabled`(= PE 트래픽에 NSG 미적용)다. 여기서는 deny-all 기준을 PE에도 실제로 적용하기 위해
-`Enabled`로 두고, 점프박스 서브넷에서의 443만 명시 허용했다.
-
-### Azure Firewall Basic의 추가 요구사항
-
-Basic SKU는 `AzureFirewallManagementSubnet`과 **별도 공인 IP**를 반드시 요구한다.
-`firewallSkuTier=Standard`로 바꾸면 관리 서브넷이 자동으로 생략된다.
-
-### 모델 선택 — `gpt-4.x` 계열은 쓸 수 없다
-
-`az cognitiveservices model list`에 나온다고 배포 가능한 것이 아니다.
-목록에는 **Deprecating 상태 모델도 함께 나오는데**, 이 모델들은 제어 평면 프리플라이트에서 거부된다.
-
-```
-ServiceModelDeprecating - The model 'Format:OpenAI,Name:gpt-4.1-mini,Version:2025-04-14'
-is in deprecating state and cannot be used for new deployments.
-```
-
-`gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` 는 전부 Deprecating 이라 신규 배포가 불가능하다.
-기본값을 `gpt-5.4-mini`(2026-03-17, GenerallyAvailable)로 잡은 이유다.
-
-모델을 바꿀 때는 **반드시 `lifecycleStatus`를 먼저 확인한다.**
-
-```bash
-az cognitiveservices model list -l westus3 \
-  --query "[?model.name=='<모델명>'].{v:model.version, ls:model.lifecycleStatus, s:join(',',model.skus[].name)}" -o table
-```
-
-`GenerallyAvailable` 이 아니면 배포되지 않는다.
-
-### Log Analytics를 기본 배포하는 이유
-
-요청 범위는 AI Foundry였지만, 방화벽 화이트리스트 실습은 **무엇이 차단됐는지 볼 수 없으면 성립하지 않는다.**
-일일 수집 상한 1GB로 비용을 묶어 두었고, `deployLogAnalytics=false`로 끌 수 있다.
-
-### `bicepconfig.json`에서 `no-hardcoded-env-urls`를 끈 이유
-
-이 린터 규칙은 하드코딩된 Azure URL을 경고한다. 하지만 방화벽 FQDN 화이트리스트는
-`login.microsoftonline.com` 같은 도메인을 **문자열 그대로 적는 것이 목적**이므로 규칙을 껐다.
-대신 `no-unused-params` 등 실질적인 규칙은 `error`로 올렸다.
-
----
-
-## 8. 비용
-
-westus3 소매가 기준(USD, 2026-08 Azure Retail Prices API 조회값). 상시 과금되는 항목만 정리했다.
-
-| 리소스 | 단가 | 시간당 |
+| 스택 | 리소스 | 시간당 |
 |---|---|---|
-| Azure Firewall **Basic** | $0.395/시간 + $0.065/GB | ~$0.40 |
-| Azure Bastion **Basic** | $0.19/시간 | $0.19 |
-| 점프박스 D2s_v5 (Windows) | $0.188/시간 | $0.188 |
-| 공인 IP Standard × 3 | ~$0.005/시간 | ~$0.015 |
-| **합계** | | **~$0.79/시간** |
+| whitelist | Azure Firewall Basic ($0.395/h + $0.065/GB) + 공인 IP 2개 | **~$0.41** |
+| private | Bastion Basic ($0.19/h) + 점프박스 D2s_v5 Windows ($0.188/h) + 공인 IP | **~$0.38** |
+| public | VNet/NSG/Foundry — 유휴 시 과금 없음 | **~$0** |
+| | **합계** | **~$0.79/시간** |
 
-- 하루 8시간 실습 ≈ **$6.3**
-- 한 달 상시 운영 ≈ **$575**
-- 참고: Azure Firewall **Standard**는 $1.25/시간 + 용량 단위 $0.07/시간으로 3배 이상 비싸다.
+- 하루 8시간 실습 ≈ **$6.3** / 한 달 상시 ≈ **$575**
+- Azure Firewall **Standard**는 $1.25/h + 용량 단위 $0.07/h로 3배 이상 비싸다.
 - Foundry 모델 호출은 토큰 사용량 기반으로 위 표와 별도다.
 
-**실습이 끝나면 반드시 삭제한다.** 방화벽과 Bastion은 유휴 상태에서도 과금된다.
+**스택이 나뉘어 있어 비용도 따로 끌 수 있다.** 실습을 쉬는 동안 whitelist만 지우면 시간당 $0.41이 즉시 절약된다.
 
 ---
 
-## 9. 정리
+## 정리
+
+역순으로 지운다.
 
 ```bash
-azd down --purge
-```
-
-또는:
-
-```bash
-az group delete -n rg-<env>-private --yes --no-wait
-az group delete -n rg-<env>-public  --yes --no-wait
-az group delete -n rg-<env>-shared  --yes --no-wait
+az group delete -n rg-$ENV-whitelist --yes --no-wait
+az group delete -n rg-$ENV-private   --yes --no-wait
+az group delete -n rg-$ENV-public    --yes --no-wait
 
 # Foundry 계정은 soft-delete 되므로 이름 재사용 전에 purge 한다.
 az cognitiveservices account list-deleted -o table
 az cognitiveservices account purge -n <계정명> -l <리전> -g <리소스그룹>
 
-# 구독 범위에 남는 정책 정의 정리
-az policy assignment delete -n assign-subnet-requires-nsg-<env> --scope /subscriptions/<구독ID>/resourceGroups/rg-<env>-private
-az policy definition delete -n policy-subnet-requires-nsg-<env>
+# private 스택이 구독 범위에 만든 정책 정의 정리
+az policy assignment delete -n assign-subnet-requires-nsg-$ENV \
+  --scope /subscriptions/<구독ID>/resourceGroups/rg-$ENV-private
+az policy definition delete -n policy-subnet-requires-nsg-$ENV
 ```
 
 ---
 
-## 10. 검증 상태
+## 검증 상태
 
-이 템플릿은 다음까지 확인했다.
+| 항목 | public | private | whitelist |
+|---|---|---|---|
+| `az bicep build` (경고·오류 0) | 통과 | 통과 | 통과 |
+| `az deployment sub validate` (westus3) | 통과 | 통과 | 통과 |
+| `az deployment sub what-if` (westus3) | Create 6건 | Create 23건 | — |
 
-- `az bicep build` — 경고·오류 0건
-- `az deployment sub validate` (westus3) — 통과
-- `az deployment sub what-if` (westus3) — 리소스 46건 Create, 오류 0건
-  (역할 할당 2건은 VM 관리 ID가 런타임 값이라 `Unsupported`로 표시되며 정상이다)
-- 모델 배포는 실제 프리플라이트로 검증했다. `gpt-4.1-mini`는 `ServiceModelDeprecating`으로 거부되어
-  GA 모델 `gpt-5.4-mini`로 교체했고, 교체 후 프리플라이트를 다시 통과했다.
-- what-if 페이로드에서 직접 확인한 항목
-  - Foundry 양쪽 모두 `disableLocalAuth=true`
-  - Private Foundry `publicNetworkAccess=Disabled`, `networkAcls.bypass=None`
-  - Public Foundry `defaultAction=Deny` + 노트북 IP + 서브넷 규칙
-  - NSG 4종 모두 우선순위 4096 deny-all 보유
-  - 방화벽 서브넷 2개를 제외한 모든 서브넷에 NSG 연결
-  - UDR `0.0.0.0/0 → VirtualAppliance 10.20.0.4`
+what-if 페이로드에서 직접 확인한 것:
 
-**실제 배포(`azd up` / `az deployment sub create`)는 아직 실행하지 않았다.**
-방화벽·Bastion 프로비저닝에 20~30분이 걸리고 과금이 시작되므로, 배포 시점은 사용자가 결정한다.
+- 각 스택이 **자기 리소스 그룹 하나만** 만든다 (`rg-holv2-public` / `rg-holv2-private`)
+- Azure Firewall / Firewall Policy가 public·private 스택 어디에도 **섞여 들어가지 않았다**
+- private VNet이 `AzureFirewallSubnet` / `AzureFirewallManagementSubnet` 자리를 예약해 둔다
+- UDR `0.0.0.0/0 → 10.20.0.4`
+- 이전 통합 버전에서 확인한 보안 속성(Foundry 양쪽 `disableLocalAuth=true`,
+  private `publicNetworkAccess=Disabled`+`bypass=None`, public `defaultAction=Deny`+IP 규칙,
+  NSG 4종 모두 4096 deny-all)은 동일한 모듈을 그대로 쓰므로 유지된다
+
+**한계 — 아직 검증하지 못한 것:**
+
+- **실제 배포는 하지 않았다.** 방화벽·Bastion 프로비저닝에 20~30분이 걸리고 과금이 시작된다.
+- whitelist 스택은 `validate`만 통과했고 `what-if`는 돌리지 않았다.
+  ARM은 이 단계에서 **다른 RG의 서브넷 존재 여부를 확인하지 않으므로**,
+  "private 없이도 whitelist가 배포된다"는 뜻이 **아니다.**
+  실제 배포 시 `AzureFirewallSubnet`이 없으면 실패한다. **private → whitelist 순서는 반드시 지켜야 한다.**

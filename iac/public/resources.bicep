@@ -1,26 +1,21 @@
 metadata description = '''
-Public 망 존.
-
-접근 경로: 실습자 노트북 -> 인터넷 -> Foundry 공용 엔드포인트
+Public 망 리소스 (리소스 그룹 범위).
 
 통제 방식
-  - publicNetworkAccess=Enabled 이지만 networkAcls.defaultAction=Deny 이므로
-    "인터넷에 열려 있음"이 아니라 "화이트리스트에 등록된 출발지만 허용"이다.
-  - 실습자 노트북 공인 IP를 ipRules에, Public VNet 워크로드 서브넷을 virtualNetworkRules에 등록한다.
-  - 인증은 keyless(API 키 비활성 + Entra ID 토큰 + RBAC)로 Private 망과 동일하다.
-
-Public 망 VNet의 서브넷에도 NSG를 붙이고 deny-all 기준선을 적용해,
-Private 망과 동일한 NSG 규칙을 유지한다.
+  - publicNetworkAccess=Enabled + networkAcls.defaultAction=Deny.
+    실습자 노트북 공인 IP를 ipRules에, 워크로드 서브넷을 virtualNetworkRules에 등록한다.
+  - 인증은 keyless(disableLocalAuth=true + Entra ID 토큰 + RBAC).
+  - VNet에 붙는 모든 서브넷에 NSG를 연결하고 deny-all 기준선을 적용한다.
 '''
 
-import { subnetConfig } from '../network/vnet.bicep'
-import { modelDeploymentConfig } from '../ai/model-deployments.bicep'
-import { roleAssignmentConfig } from '../identity/foundry-role-assignments.bicep'
+import { subnetConfig } from '../modules/network/vnet.bicep'
+import { modelDeploymentConfig } from '../modules/ai/model-deployments.bicep'
+import { roleAssignmentConfig } from '../modules/identity/foundry-role-assignments.bicep'
 import {
   COGNITIVE_SERVICES_USER_ROLE_ID
   COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID
   AZURE_AI_DEVELOPER_ROLE_ID
-} from '../identity/role-definitions.bicep'
+} from '../modules/identity/role-definitions.bicep'
 
 @description('리소스 이름 접두사')
 param namePrefix string
@@ -35,10 +30,10 @@ param location string
 param tags object = {}
 
 @description('Public VNet 주소 공간')
-param vnetAddressPrefix string = '10.10.0.0/16'
+param vnetAddressPrefix string
 
 @description('Public 워크로드 서브넷 CIDR')
-param workloadSubnetPrefix string = '10.10.1.0/24'
+param workloadSubnetPrefix string
 
 @description('실습자 노트북 공인 IP. 빈 값이면 IP 화이트리스트 없이 배포되어 아무도 접근할 수 없다.')
 param labClientIpAddress string = ''
@@ -92,7 +87,7 @@ var workloadNsgRules = [
   }
 ]
 
-module workloadNsg '../network/nsg.bicep' = {
+module workloadNsg '../modules/network/nsg.bicep' = {
   name: 'public-nsg-workload'
   params: {
     name: 'nsg-${namePrefix}-public-workload'
@@ -114,7 +109,7 @@ var subnets subnetConfig[] = [
   }
 ]
 
-module vnet '../network/vnet.bicep' = {
+module vnet '../modules/network/vnet.bicep' = {
   name: 'public-vnet'
   params: {
     name: 'vnet-${namePrefix}-public'
@@ -127,7 +122,7 @@ module vnet '../network/vnet.bicep' = {
 
 var foundryAccountName = 'aif-${namePrefix}-pub-${resourceToken}'
 
-module foundry '../ai/foundry-account.bicep' = {
+module foundry '../modules/ai/foundry-account.bicep' = {
   name: 'public-foundry-account'
   params: {
     name: foundryAccountName
@@ -143,7 +138,7 @@ module foundry '../ai/foundry-account.bicep' = {
   }
 }
 
-module project '../ai/foundry-project.bicep' = {
+module project '../modules/ai/foundry-project.bicep' = {
   name: 'public-foundry-project'
   params: {
     accountName: foundry.outputs.name
@@ -155,7 +150,7 @@ module project '../ai/foundry-project.bicep' = {
   }
 }
 
-module deployments '../ai/model-deployments.bicep' = {
+module deployments '../modules/ai/model-deployments.bicep' = {
   name: 'public-foundry-deployments'
   params: {
     accountName: foundry.outputs.name
@@ -187,7 +182,7 @@ var labUserAssignments roleAssignmentConfig[] = empty(labUserPrincipalId) ? [] :
   }
 ]
 
-module roleAssignments '../identity/foundry-role-assignments.bicep' = if (!empty(labUserPrincipalId)) {
+module roleAssignments '../modules/identity/foundry-role-assignments.bicep' = if (!empty(labUserPrincipalId)) {
   name: 'public-foundry-roles'
   params: {
     accountName: foundry.outputs.name
@@ -209,6 +204,3 @@ output foundryEndpoint string = foundry.outputs.endpoint
 
 @description('Public Foundry 프로젝트 이름')
 output foundryProjectName string = project.outputs.name
-
-@description('IP 화이트리스트에 등록된 실습자 IP')
-output allowedClientIpAddress string = labClientIpAddress
