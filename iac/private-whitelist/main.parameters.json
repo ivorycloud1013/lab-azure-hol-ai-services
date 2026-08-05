@@ -8,14 +8,26 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
-    "privateVnetResourceGroupName": {
-      "value": "${PRIVATE_RESOURCE_GROUP}"
+    "labUserPrincipalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
     },
-    "privateVnetName": {
-      "value": "${PRIVATE_VNET_NAME}"
+    "labUserPrincipalType": {
+      "value": "${LAB_USER_PRINCIPAL_TYPE=User}"
     },
-    "expectedFirewallPrivateIp": {
-      "value": "${EXPECTED_FIREWALL_PRIVATE_IP=}"
+    "vnetAddressPrefix": {
+      "value": "${VNET_ADDRESS_PREFIX=10.30.0.0/16}"
+    },
+    "bastionSkuName": {
+      "value": "${BASTION_SKU_NAME=Basic}"
+    },
+    "vmAdminUsername": {
+      "value": "${VM_ADMIN_USERNAME=azureuser}"
+    },
+    "vmAdminPassword": {
+      "value": "${VM_ADMIN_PASSWORD}"
+    },
+    "vmSize": {
+      "value": "${VM_SIZE=Standard_D2s_v5}"
     },
     "firewallSkuTier": {
       "value": "${FIREWALL_SKU_TIER=Basic}"
@@ -28,6 +40,9 @@
     },
     "existingLogAnalyticsWorkspaceId": {
       "value": "${EXISTING_LOG_ANALYTICS_WORKSPACE_ID=}"
+    },
+    "subnetNsgPolicyEffect": {
+      "value": "${SUBNET_NSG_POLICY_EFFECT=Audit}"
     }
   }
 }

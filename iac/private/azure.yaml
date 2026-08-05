@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
-# 스택 2/3 — Private 망. 이 디렉터리에서 `azd up` 을 실행한다. whitelist 스택보다 먼저 배포해야 한다.
+# 스택 2/3 — Private 망. 이 디렉터리에서 `azd up` 을 실행한다. 다른 스택 의존은 없다.
 name: hol-ai-foundry-private
 metadata:
   template: lab-azure-hol-ai-services-private@1.0.0

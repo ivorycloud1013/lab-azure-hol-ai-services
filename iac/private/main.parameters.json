@@ -17,9 +17,6 @@
     "privateVnetAddressPrefix": {
       "value": "${PRIVATE_VNET_ADDRESS_PREFIX=10.20.0.0/16}"
     },
-    "deployFirewallManagementSubnet": {
-      "value": "${DEPLOY_FIREWALL_MANAGEMENT_SUBNET=true}"
-    },
     "bastionSkuName": {
       "value": "${BASTION_SKU_NAME=Basic}"
     },

@@ -2,7 +2,7 @@ metadata description = '''
 [스택 1/3] Public 망 — 독립 배포 단위.
 
 전용 리소스 그룹 rg-<기본이름>-public 하나만 만들고 그 안에서 끝난다.
-다른 스택(private, whitelist)과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
+다른 스택(private, private-whitelist)과 어떤 리소스도 공유하지 않으며, 배포 순서 제약도 없다.
 
 접근 경로: 실습자 노트북 -> 인터넷 -> Foundry 공용 엔드포인트
 
@@ -51,7 +51,7 @@ param labUserPrincipalId string = ''
 @allowed(['User', 'Group', 'ServicePrincipal'])
 param labUserPrincipalType string = 'User'
 
-@description('Public VNet 주소 공간. private 스택(10.20.0.0/16)과 겹치지 않아야 한다.')
+@description('Public VNet 주소 공간. private(10.20.0.0/16) · private-whitelist(10.30.0.0/16)와 겹치지 않아야 한다.')
 param vnetAddressPrefix string = '10.10.0.0/16'
 
 @description('배포할 모델 목록. lifecycleStatus=GenerallyAvailable 인 모델만 배포된다.')
