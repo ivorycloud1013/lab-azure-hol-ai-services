@@ -131,14 +131,14 @@ param allowedServiceTags string[] = []
 @description('Entra ID 인증 및 Azure 관리 평면 FQDN 화이트리스트')
 param identityAndManagementFqdns string[] = [
   'login.microsoftonline.com'
-  'login.microsoft.com'
-  'login.windows.net'
-  '*.login.microsoftonline.com'
+  //'login.microsoft.com'
+  //'login.windows.net'
+  //'*.login.microsoftonline.com'
   'management.azure.com'
   'graph.microsoft.com'
-  '*.msauth.net'
-  '*.msftauth.net'
-  '*.aadcdn.msftauth.net'
+  //'*.msauth.net'
+  //'*.msftauth.net'
+  //'*.aadcdn.msftauth.net'
 ]
 
 @description('Azure AI Foundry 데이터/제어 평면 FQDN 화이트리스트')
@@ -148,17 +148,17 @@ param foundryFqdns string[] = [
   '*.services.ai.azure.com'
   '*.openai.azure.com'
   '*.cognitiveservices.azure.com'
+  '*.search.windows.net'
   '*.azureml.ms'
-  '*.api.azureml.ms'
 ]
 
 @description('Azure Portal FQDN 화이트리스트')
 param portalFqdns string[] = [
   'portal.azure.com'
-  '*.portal.azure.com'
-  '*.portal.azure.net'
-  '*.hosting.portal.azure.net'
-  '*.ext.azure.com'
+  //'*.portal.azure.com'
+  //'*.portal.azure.net'
+  //'*.hosting.portal.azure.net'
+  //'*.ext.azure.com'
 ]
 
 @description('실습 도구(Python 패키지 등) FQDN 화이트리스트')
