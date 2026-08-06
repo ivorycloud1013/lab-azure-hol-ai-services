@@ -18,13 +18,23 @@ param virtualNetworkId string
 @description('VNet 링크에 자동 등록을 켤지 여부. Private Endpoint 용도에서는 false여야 한다.')
 param registrationEnabled bool = false
 
+@description('''
+존을 VNet에 연결할지 여부. 기본값은 true다.
+
+false로 두면 존과 A 레코드는 그대로 만들어지지만 VNet에서 조회되지 않는다.
+점프박스를 on-prem 노트북처럼 만들 때 쓴다. on-prem 클라이언트는 Azure Private DNS Zone을
+볼 수 없으므로, 모든 이름이 공용으로 해석되고 모든 트래픽이 방화벽을 거친다.
+그래야 방화벽 로그로 고객사에 제출할 FQDN 목록을 빠짐없이 뽑을 수 있다.
+''')
+param linkToVirtualNetwork bool = true
+
 resource zone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
   name: name
   location: 'global'
   tags: tags
 }
 
-resource link 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+resource link 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (linkToVirtualNetwork) {
   parent: zone
   name: 'link-${uniqueString(virtualNetworkId)}'
   location: 'global'
