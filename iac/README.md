@@ -165,6 +165,20 @@ make deploy-private REGION=eastus2 VM_SIZE=Standard_D2s_v7
 
 템플릿 기본값은 `Standard_D2s_v5`이며, 리전을 바꾸는 것도 방법입니다.
 
+#### 점프박스 비밀번호 요건
+
+Azure VM은 길이뿐 아니라 문자 종류도 요구합니다.
+
+- 12~72자
+- 대문자 · 소문자 · 숫자 · 특수문자 중 **3종류 이상**
+
+`make deploy-private`는 비밀번호를 두 번 입력받아 서로 대조한 뒤, 위 조건을
+배포 전에 검사합니다. 조건에 맞지 않으면 Azure를 호출하지 않고 바로 멈추므로
+몇 분 배포한 끝에 `InvalidParameter: osProfile.adminPassword`로 실패하는 일이 없습니다.
+
+`VM_ADMIN_PASSWORD=...`처럼 인자로 넘길 수도 있지만, 값이 셸 히스토리에 남고
+`$`가 들어 있으면 make가 변수로 치환해 버립니다. 입력 프롬프트를 쓰는 쪽이 안전합니다.
+
 ### Azure Developer CLI(azd)로 배포하기
 
 각 시스템 디렉터리가 독립된 azd 프로젝트입니다. 해당 폴더로 이동해 실행합니다.

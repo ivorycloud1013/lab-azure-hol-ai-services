@@ -81,13 +81,37 @@ fi
 endef
 
 # VM 비밀번호를 $$VM_PASSWORD 에 채운다. 인자로 넘어오지 않았으면 입력받는다.
+#
+# Azure VM 은 길이(12~72자)뿐 아니라 문자 종류 복잡성도 요구한다.
+# 대문자 · 소문자 · 숫자 · 특수문자 중 3가지 이상을 포함해야 한다.
+# Bicep 의 @minLength 로는 길이만 검사할 수 있어서 여기서 미리 걸러낸다.
+# 배포가 몇 분 진행된 뒤 osProfile.adminPassword 에서 실패하는 것을 막기 위함이다.
 define resolve_vm_password
 VM_PASSWORD="$(VM_ADMIN_PASSWORD)"; \
 if [ -z "$$VM_PASSWORD" ]; then \
-  read -rsp "점프박스 VM 비밀번호(12자 이상): " VM_PASSWORD; echo; \
+  read -rsp "점프박스 VM 비밀번호(12자 이상, 대소문자·숫자·특수문자 중 3종류 이상): " VM_PASSWORD; echo; \
+  read -rsp "확인을 위해 한 번 더 입력하세요: " VM_PASSWORD_CONFIRM; echo; \
+  if [ "$$VM_PASSWORD" != "$$VM_PASSWORD_CONFIRM" ]; then \
+    echo "ERROR: 두 번 입력한 비밀번호가 서로 다릅니다."; \
+    echo "       화면에 표시되지 않으므로 오타를 확인하고 다시 실행하세요."; \
+    exit 1; \
+  fi; \
+  unset VM_PASSWORD_CONFIRM; \
 fi; \
-if [ $${#VM_PASSWORD} -lt 12 ]; then \
-  echo "ERROR: 비밀번호는 12자 이상이어야 합니다."; \
+if [ $${#VM_PASSWORD} -lt 12 ] || [ $${#VM_PASSWORD} -gt 72 ]; then \
+  echo "ERROR: 비밀번호는 12~72자여야 합니다. (현재 $${#VM_PASSWORD}자)"; \
+  exit 1; \
+fi; \
+CLASS_COUNT=0; \
+case "$$VM_PASSWORD" in *[[:upper:]]*) CLASS_COUNT=$$((CLASS_COUNT + 1));; esac; \
+case "$$VM_PASSWORD" in *[[:lower:]]*) CLASS_COUNT=$$((CLASS_COUNT + 1));; esac; \
+case "$$VM_PASSWORD" in *[[:digit:]]*) CLASS_COUNT=$$((CLASS_COUNT + 1));; esac; \
+case "$$VM_PASSWORD" in *[^[:alnum:]]*) CLASS_COUNT=$$((CLASS_COUNT + 1));; esac; \
+if [ $$CLASS_COUNT -lt 3 ]; then \
+  echo "ERROR: 비밀번호는 대문자 · 소문자 · 숫자 · 특수문자 중 3종류 이상을 포함해야 합니다."; \
+  echo "       현재 $$CLASS_COUNT 종류만 들어 있습니다."; \
+  echo "       VM_ADMIN_PASSWORD 를 인자로 넘겼다면 \$$ 가 make 에 의해 치환됐을 수 있습니다."; \
+  echo "       인자 없이 실행해 입력 프롬프트를 쓰는 편이 안전합니다."; \
   exit 1; \
 fi
 endef
