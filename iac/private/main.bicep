@@ -170,6 +170,10 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     vmAdminPassword: vmAdminPassword
     labUserPrincipalId: labUserPrincipalId
     labUserPrincipalType: labUserPrincipalType
+    // 이 시스템에는 방화벽이 없어 FQDN 로그를 뽑을 대상이 없다.
+    // 반대로 "Private Endpoint 경유로만 접근한다"를 보여주는 것이 이 시스템의 목적이므로
+    // 링크를 켠다. 링크를 끄면 Foundry 이름이 공용 IP로 풀려 접근 자체가 실패한다.
+    linkPrivateDnsZonesToVnet: true
     projectName: 'proj-${SYSTEM_ABBREV}-${location}'
     projectDisplayName: 'Private 망 실습 프로젝트'
     projectDescription: 'Private Endpoint 경유로만 접근 가능한 Foundry 프로젝트'

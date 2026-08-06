@@ -111,6 +111,17 @@ param labUserPrincipalId string = ''
 @allowed(['User', 'Group', 'ServicePrincipal'])
 param labUserPrincipalType string = 'User'
 
+@description('''
+Private DNS Zone을 VNet에 연결할지 여부. 기본값은 false다.
+
+false면 점프박스가 on-prem 노트북처럼 동작한다. Private DNS Zone을 볼 수 없어
+Foundry 이름이 공용 IP로 해석되고, 모든 트래픽이 방화벽을 거쳐 로그에 FQDN이 남는다.
+고객사 방화벽에 제출할 FQDN 목록을 빠짐없이 뽑는 것이 목적이다.
+
+true면 사설 IP로 해석되어 Private Endpoint 경유로 접근한다.
+''')
+param linkPrivateDnsZonesToVnet bool = false
+
 @description('Foundry 프로젝트 이름')
 param projectName string
 
@@ -445,6 +456,7 @@ module privateDnsZones '../network/private-dns-zone.bicep' = [
       name: zoneName
       tags: tags
       virtualNetworkId: vnet.outputs.id
+      linkToVirtualNetwork: linkPrivateDnsZonesToVnet
     }
   }
 ]
