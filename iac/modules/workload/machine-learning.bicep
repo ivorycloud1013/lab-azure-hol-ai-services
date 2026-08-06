@@ -4,6 +4,7 @@ Private 망 Azure Machine Learning 묶음 (리소스 그룹 범위에 배포되�
 만드는 리소스
   - Storage Account (AML 기본 데이터스토어) + blob / file Private Endpoint
   - Key Vault (AML 비밀 저장소) + vault Private Endpoint
+  - Application Insights (+ 이를 받치는 Log Analytics 작업 영역)
   - Azure Machine Learning 워크스페이스 + amlworkspace Private Endpoint
   - 위 Private Endpoint 의 이름 해석에 필요한 Private DNS Zone 5개
   - 실습자와 점프박스 관리 ID 에 대한 AzureML Data Scientist 역할 할당
@@ -23,8 +24,8 @@ Private 망 Azure Machine Learning 묶음 (리소스 그룹 범위에 배포되�
   - Container Registry: 커스텀 환경(사용자 지정 Docker 이미지)을 빌드할 때만 필요하다.
     실습은 큐레이팅된 환경으로 충분하므로 만들지 않는다. 커스텀 이미지가 필요해지면
     ACR 과 Private Endpoint 를 추가하고 워크스페이스에 containerRegistry 로 연결한다.
-  - Application Insights: 워크스페이스의 선택 항목이라 연결하지 않는다.
-    필요해지면 ai/machine-learning-workspace.bicep 의 applicationInsightsId 로 넘기면 된다.
+  (Application Insights 는 선택 항목이 아니다. storageAccount · keyVault 와 함께 반드시 있어야
+   워크스페이스를 만들 수 있어서 이 모듈이 직접 만든다.)
 
 컴퓨팅(Compute Instance / Cluster)은 이 모듈이 만들지 않는다.
 워크스페이스의 관리형 네트워크를 켜 두었으므로, 실습 중에 컴퓨팅을 만들면 Azure 가 관리하는
@@ -222,6 +223,36 @@ module keyVaultPrivateEndpoint '../network/private-endpoint.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Application Insights (워크스페이스 필수 의존 리소스)
+//
+// 클래식 Application Insights 는 사용이 중단되어 Log Analytics 작업 영역에 연결된
+// workspace-based 로만 만들 수 있다. 시스템이 이미 작업 영역을 넘겼으면 그것을 재사용하고,
+// 없으면 AML 전용으로 하나 만든다. 이 작업 영역은 Application Insights 를 받치는 용도이며,
+// 진단 로그를 어디로 보낼지는 이 모듈의 다른 리소스와 마찬가지로 logAnalyticsWorkspaceId 가 정한다.
+// ---------------------------------------------------------------------------
+
+var needsOwnLogAnalytics = empty(logAnalyticsWorkspaceId)
+
+module amlLogAnalytics '../monitor/log-analytics.bicep' = if (needsOwnLogAnalytics) {
+  name: 'aml-log-analytics-${nameSuffix}'
+  params: {
+    name: 'log-aml-${resourceToken}'
+    location: location
+    tags: tags
+  }
+}
+
+module applicationInsights '../monitor/application-insights.bicep' = {
+  name: 'aml-app-insights-${nameSuffix}'
+  params: {
+    name: 'appi-aml-${resourceToken}'
+    location: location
+    tags: tags
+    workspaceResourceId: needsOwnLogAnalytics ? amlLogAnalytics!.outputs.id : logAnalyticsWorkspaceId
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 워크스페이스
 // ---------------------------------------------------------------------------
 
@@ -235,6 +266,7 @@ module workspace '../ai/machine-learning-workspace.bicep' = {
     workspaceDescription: workspaceDescription
     storageAccountId: storage.outputs.id
     keyVaultId: keyVault.outputs.id
+    applicationInsightsId: applicationInsights.outputs.id
     publicNetworkAccess: 'Disabled'
     managedNetworkIsolationMode: managedNetworkIsolationMode
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId

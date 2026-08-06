@@ -246,7 +246,7 @@ modules/
 ├── compute/    jumpbox
 ├── identity/   role-definitions, foundry-role-assignments,
 │               machine-learning-role-assignments
-├── monitor/    log-analytics
+├── monitor/    log-analytics, application-insights
 ├── governance/ subnet-nsg-policy, policy-assignment
 └── workload/   private-foundry-workload   ← private / private-whitelist 공통 구성
                 machine-learning           ← private 에서만 쓰는 AML 묶음

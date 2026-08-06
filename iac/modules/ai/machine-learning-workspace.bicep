@@ -1,6 +1,11 @@
 metadata description = '''
 Azure Machine Learning 워크스페이스 모듈 (Microsoft.MachineLearningServices/workspaces, kind=Default).
 
+필수 의존 리소스
+  storageAccount · keyVault · applicationInsights 세 가지를 모두 넘겨야 한다.
+  하나라도 비면 리소스 공급자가 "Missing dependent resources in workspace json" 으로 거부한다.
+  containerRegistry 는 커스텀 Docker 이미지를 빌드할 때만 필요한 선택 항목이다.
+
 네트워크
   - publicNetworkAccess=Disabled 로 공용 엔드포인트를 닫는다.
     이후 제어 평면(스튜디오·SDK·CLI) 접근은 amlworkspace Private Endpoint 로만 가능하다.
@@ -44,8 +49,16 @@ param storageAccountId string
 @description('비밀 저장소로 연결할 Key Vault 리소스 ID')
 param keyVaultId string
 
-@description('연결할 Application Insights 리소스 ID. 빈 문자열이면 연결하지 않는다.')
-param applicationInsightsId string = ''
+@description('''
+연결할 Application Insights 리소스 ID. 선택 항목이 아니라 필수다.
+
+kind=Default 워크스페이스는 storageAccount · keyVault · applicationInsights 세 가지를 모두
+요구한다. 하나라도 비우면 리소스 공급자가 다음 오류로 거부한다.
+  ValidationError: Missing dependent resources in workspace json
+기본값을 두지 않는 이유는, 빈 값이 null 로 나가 조용히 실패하는 경로를 막기 위해서다.
+''')
+@minLength(1)
+param applicationInsightsId string
 
 @description('공용 네트워크 접근 허용 여부. Private 망 워크스페이스는 Disabled.')
 @allowed(['Enabled', 'Disabled'])
@@ -71,7 +84,7 @@ resource workspace 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
     description: workspaceDescription
     storageAccount: storageAccountId
     keyVault: keyVaultId
-    applicationInsights: empty(applicationInsightsId) ? null : applicationInsightsId
+    applicationInsights: applicationInsightsId
     publicNetworkAccess: publicNetworkAccess
     // v1 호환 모드를 끄면 v2 API 와 RBAC 기반 권한 모델을 그대로 쓴다.
     v1LegacyMode: false

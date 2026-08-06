@@ -44,6 +44,7 @@ Foundry용 서브넷과 분리해 둔 이유는, 두 서비스의 접근 경로�
 | 워크스페이스 | `publicNetworkAccess=Disabled` — 공용 엔드포인트 자체가 없습니다. `amlworkspace` Private Endpoint만이 유일한 경로입니다 |
 | 스토리지 계정 (기본 데이터스토어) | `networkAcls.defaultAction=Deny` + `bypass=AzureServices`, `blob`/`file` Private Endpoint |
 | Key Vault (비밀 저장소) | `networkAcls.defaultAction=Deny` + `bypass=AzureServices`, `vault` Private Endpoint, RBAC 인증 |
+| Application Insights (+ Log Analytics) | 워크스페이스의 **필수** 의존 리소스입니다. 셋(스토리지 · Key Vault · App Insights) 중 하나라도 없으면 `Missing dependent resources in workspace json` 으로 배포가 실패합니다. 클래식 App Insights는 사용이 중단되어 Log Analytics 작업 영역에 연결된 형태로 만듭니다 |
 | 권한 | 실습자 계정과 점프박스 관리 ID에 **AzureML Data Scientist** 역할 |
 
 **스토리지와 Key Vault만 `publicNetworkAccess=Disabled`가 아닌 이유**
