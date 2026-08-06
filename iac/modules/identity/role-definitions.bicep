@@ -20,3 +20,7 @@ var COGNITIVE_SERVICES_OPENAI_CONTRIBUTOR_ROLE_ID = 'a001fd3d-188f-4b5d-821b-7da
 @export()
 @description('Azure AI Developer - Foundry 프로젝트 작업')
 var AZURE_AI_DEVELOPER_ROLE_ID = '64702f94-c441-49e6-a78b-ef80e0188fee'
+
+@export()
+@description('AzureML Data Scientist - AML 워크스페이스에서 실험/작업/컴퓨팅 사용 (워크스페이스 자체 설정 변경은 불가)')
+var AZURE_ML_DATA_SCIENTIST_ROLE_ID = 'f6c7c914-8db3-469d-8ca1-694a8f32e121'

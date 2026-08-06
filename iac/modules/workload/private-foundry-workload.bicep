@@ -3,11 +3,13 @@ Private 망 공통 리소스 묶음 (리소스 그룹 범위에 배포되는 모
 
 여러 리소스를 한 번에 만드는 composite module 이다. 만드는 리소스는 다음과 같다.
   - Virtual Network (VNet)
-  - Network Security Group (NSG) 3개와 서브넷 연결
+  - Network Security Group (NSG) 3~4개와 서브넷 연결
   - Azure Bastion
   - 점프박스 역할을 하는 Windows 가상 머신(VM)
   - Azure AI Foundry 계정 + Private Endpoint + Private DNS Zone
   - Foundry 호출에 필요한 RBAC 역할 할당 (API 키를 쓰지 않는 keyless 인증)
+  - (선택) Azure Machine Learning 묶음 — machineLearningSubnetPrefix 를 준 경우에만.
+    전용 서브넷 snet-aml 과 그 NSG 를 만들고 machine-learning.bicep 을 호출한다.
 
 private 시스템과 private-whitelist 시스템이 이 모듈을 공통으로 사용한다.
 두 시스템이 같은 내용을 각자 복사해서 갖고 있으면, 한쪽만 수정했을 때 보안 설정이
@@ -20,13 +22,16 @@ private 시스템과 private-whitelist 시스템이 이 모듈을 공통으로 �
      닫고, networkAcls.bypass=None 으로 "신뢰할 수 있는 Azure 서비스"의 예외 통과도 막는다.
      결과적으로 Private Endpoint 를 통한 접근만 가능하다.
 
-private 시스템과 private-whitelist 시스템의 차이는 아래 매개변수 2개로만 표현된다.
-  platformSubnets     : NSG를 연결할 수 없는 서브넷(AzureFirewallSubnet 등)을 추가로 만든다.
-                        private 시스템은 빈 배열을 넘기고,
-                        private-whitelist 시스템은 방화벽용 서브넷을 넘긴다.
-  jumpboxRouteTableId : 점프박스 서브넷에 연결할 Route Table 의 리소스 ID.
-                        private 시스템은 빈 문자열을 넘겨 인터넷으로 바로 나가게 하고,
-                        private-whitelist 시스템은 "0.0.0.0/0 -> 방화벽" 경로를 넘긴다.
+private 시스템과 private-whitelist 시스템의 차이는 아래 매개변수 3개로만 표현된다.
+  platformSubnets             : NSG를 연결할 수 없는 서브넷(AzureFirewallSubnet 등)을 추가로 만든다.
+                                private 시스템은 빈 배열을 넘기고,
+                                private-whitelist 시스템은 방화벽용 서브넷을 넘긴다.
+  jumpboxRouteTableId         : 점프박스 서브넷에 연결할 Route Table 의 리소스 ID.
+                                private 시스템은 빈 문자열을 넘겨 인터넷으로 바로 나가게 하고,
+                                private-whitelist 시스템은 "0.0.0.0/0 -> 방화벽" 경로를 넘긴다.
+  machineLearningSubnetPrefix : Azure Machine Learning 전용 서브넷의 CIDR.
+                                private 시스템은 CIDR 을 넘겨 AML 을 함께 배포하고,
+                                private-whitelist 시스템은 빈 문자열을 넘겨 배포하지 않는다.
 
 NSG 규칙은 IP 대역과 포트(OSI 3~4계층) 수준까지만 허용 범위를 정한다.
 도메인 이름(FQDN) 단위의 통제는 이 모듈이 아니라 Azure Firewall 이 담당한다.
@@ -83,6 +88,19 @@ param privateEndpointSubnetPrefix string
 @description('점프박스 서브넷 CIDR')
 param jumpboxSubnetPrefix string
 
+@description('''
+Azure Machine Learning 전용 서브넷 CIDR. 빈 문자열이면 AML 을 배포하지 않는다.
+
+값을 주면 snet-aml 서브넷과 전용 NSG 를 만들고, 그 서브넷에 AML 워크스페이스와
+연결 리소스(스토리지 · Key Vault)의 Private Endpoint 를 놓는다.
+자세한 구성은 modules/workload/machine-learning.bicep 을 참고한다.
+''')
+param machineLearningSubnetPrefix string = ''
+
+@description('AML 워크스페이스의 관리형 네트워크 격리 모드. 컴퓨팅이 놓일 네트워크를 결정한다.')
+@allowed(['Disabled', 'AllowInternetOutbound', 'AllowOnlyApprovedOutbound'])
+param machineLearningIsolationMode string = 'AllowInternetOutbound'
+
 @description('점프박스 서브넷에 연결할 Route Table 리소스 ID. 빈 문자열이면 UDR 없이 인터넷 직통이다.')
 param jumpboxRouteTableId string = ''
 
@@ -131,6 +149,12 @@ param projectDisplayName string
 @description('Foundry 프로젝트 설명')
 param projectDescription string
 
+@description('AML 워크스페이스 표시 이름. machineLearningSubnetPrefix 를 준 경우에만 쓰인다.')
+param machineLearningFriendlyName string = 'Private 망 실습 워크스페이스'
+
+@description('AML 워크스페이스 설명. machineLearningSubnetPrefix 를 준 경우에만 쓰인다.')
+param machineLearningDescription string = 'Private Endpoint 경유로만 접근 가능한 Machine Learning 워크스페이스'
+
 @description('배포할 모델 목록')
 param modelDeployments modelDeploymentConfig[]
 
@@ -147,6 +171,10 @@ var AZURE_PLATFORM_DNS_IP = '168.63.129.16'
 var privateEndpointSubnetName = 'snet-private-endpoint'
 var jumpboxSubnetName = 'snet-jumpbox'
 var bastionSubnetName = 'AzureBastionSubnet'
+var machineLearningSubnetName = 'snet-aml'
+
+// AML 은 서브넷 CIDR 을 준 시스템에서만 배포된다. private 은 주고, private-whitelist 는 주지 않는다.
+var deployMachineLearning = !empty(machineLearningSubnetPrefix)
 
 var stackName = '${namePrefix}-${nameSuffix}'
 
@@ -298,7 +326,7 @@ var privateEndpointNsgRules = [
 // NSG 규칙은 라우팅으로 결정된 다음 홉(next hop)이 아니라, 패킷에 적힌 원래 목적지를 기준으로 평가된다.
 // 따라서 Route Table 로 방화벽에 보내는 트래픽이라도 NSG에서는 원래 목적지(Internet 등)를 허용해야 통과한다.
 // 여기서는 포트 수준까지만 허용하고, 어떤 도메인으로 나갈 수 있는지는 Azure Firewall 이 통제한다.
-var jumpboxNsgRules = [
+var jumpboxBaseNsgRules = [
   {
     name: 'AllowBastionInbound'
     properties: {
@@ -357,6 +385,46 @@ var jumpboxNsgRules = [
   }
 ]
 
+// AML 을 배포하는 시스템에서만 붙는 규칙.
+// 스튜디오·SDK 호출도, 데이터스토어 읽기·쓰기도 모두 snet-aml 의 Private Endpoint 를 향한다.
+var jumpboxMachineLearningNsgRules = deployMachineLearning ? [
+  {
+    name: 'AllowMachineLearningOutbound'
+    properties: {
+      description: 'Private Endpoint 경유 AML 워크스페이스 / 스토리지 / Key Vault 호출.'
+      priority: 130
+      direction: 'Outbound'
+      access: 'Allow'
+      protocol: 'Tcp'
+      sourceAddressPrefix: jumpboxSubnetPrefix
+      sourcePortRange: '*'
+      destinationAddressPrefix: machineLearningSubnetPrefix
+      destinationPortRange: '443'
+    }
+  }
+] : []
+
+var jumpboxNsgRules = concat(jumpboxBaseNsgRules, jumpboxMachineLearningNsgRules)
+
+// AML 서브넷에는 Private Endpoint 만 놓인다. 들어오는 트래픽은 점프박스의 HTTPS 뿐이고,
+// Private Endpoint 는 스스로 아웃바운드를 만들지 않으므로 아웃바운드는 전부 차단된 상태로 둔다.
+var machineLearningNsgRules = [
+  {
+    name: 'AllowJumpboxHttpsInbound'
+    properties: {
+      description: '점프박스 서브넷에서 AML Private Endpoint 로의 HTTPS 만 허용.'
+      priority: 100
+      direction: 'Inbound'
+      access: 'Allow'
+      protocol: 'Tcp'
+      sourceAddressPrefix: jumpboxSubnetPrefix
+      sourcePortRange: '*'
+      destinationAddressPrefix: machineLearningSubnetPrefix
+      destinationPortRange: '443'
+    }
+  }
+]
+
 module bastionNsg '../network/nsg.bicep' = {
   name: 'nsg-bastion-${nameSuffix}'
   params: {
@@ -393,6 +461,18 @@ module jumpboxNsg '../network/nsg.bicep' = {
   }
 }
 
+module machineLearningNsg '../network/nsg.bicep' = if (deployMachineLearning) {
+  name: 'nsg-aml-${nameSuffix}'
+  params: {
+    name: 'nsg-${stackName}-aml'
+    location: location
+    tags: tags
+    securityRules: machineLearningNsgRules
+    enableDenyAllBaseline: true
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+}
+
 // ---------------------------------------------------------------------------
 // VNet
 // ---------------------------------------------------------------------------
@@ -418,6 +498,16 @@ var managedSubnets subnetConfig[] = [
   }
 ]
 
+// AML 을 배포하지 않는 시스템에서는 빈 배열이 되어 서브넷 자체가 만들어지지 않는다.
+var machineLearningSubnets subnetConfig[] = deployMachineLearning ? [
+  {
+    name: machineLearningSubnetName
+    addressPrefix: machineLearningSubnetPrefix
+    networkSecurityGroupId: machineLearningNsg!.outputs.id
+    privateEndpointNetworkPolicies: privateEndpointNetworkPolicies
+  }
+] : []
+
 module vnet '../network/vnet.bicep' = {
   name: 'vnet-${nameSuffix}'
   params: {
@@ -425,7 +515,7 @@ module vnet '../network/vnet.bicep' = {
     location: location
     tags: tags
     addressPrefixes: [vnetAddressPrefix]
-    subnets: concat(platformSubnets, managedSubnets)
+    subnets: concat(platformSubnets, managedSubnets, machineLearningSubnets)
   }
 }
 
@@ -543,6 +633,35 @@ module jumpbox '../compute/jumpbox.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Machine Learning (선택)
+//
+// 워크스페이스와 연결 리소스는 Foundry 와 같은 VNet 의 다른 서브넷(snet-aml)에 붙는다.
+// Foundry 용 Private Endpoint 서브넷과 분리해 두면, NSG 로 두 서비스의 접근 경로를
+// 따로 통제할 수 있고 어떤 트래픽이 어디로 가는지도 서브넷 단위로 드러난다.
+// ---------------------------------------------------------------------------
+
+module machineLearning './machine-learning.bicep' = if (deployMachineLearning) {
+  name: 'machine-learning-${nameSuffix}'
+  params: {
+    namePrefix: namePrefix
+    nameSuffix: nameSuffix
+    resourceToken: resourceToken
+    location: location
+    tags: tags
+    virtualNetworkId: vnet.outputs.id
+    subnetId: vnet.outputs.subnetIds[machineLearningSubnetName]
+    linkPrivateDnsZonesToVnet: linkPrivateDnsZonesToVnet
+    managedNetworkIsolationMode: machineLearningIsolationMode
+    workspaceFriendlyName: machineLearningFriendlyName
+    workspaceDescription: machineLearningDescription
+    labUserPrincipalId: labUserPrincipalId
+    labUserPrincipalType: labUserPrincipalType
+    jumpboxPrincipalId: jumpbox.outputs.principalId
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+}
+
+// ---------------------------------------------------------------------------
 // RBAC - API 키를 쓰지 않으므로, Foundry 호출 권한은 역할 할당으로만 부여된다
 // ---------------------------------------------------------------------------
 
@@ -626,3 +745,15 @@ output foundryProjectName string = project.outputs.name
 
 @description('Foundry Private Endpoint 이름')
 output foundryPrivateEndpointName string = foundryPrivateEndpoint.outputs.name
+
+@description('AML 을 배포했는지 여부')
+output machineLearningDeployed bool = deployMachineLearning
+
+@description('AML 워크스페이스 이름. 배포하지 않았으면 빈 문자열.')
+output machineLearningWorkspaceName string = deployMachineLearning ? machineLearning!.outputs.workspaceName : ''
+
+@description('AML 기본 데이터스토어 스토리지 계정 이름. 배포하지 않았으면 빈 문자열.')
+output machineLearningStorageAccountName string = deployMachineLearning ? machineLearning!.outputs.storageAccountName : ''
+
+@description('AML Key Vault 이름. 배포하지 않았으면 빈 문자열.')
+output machineLearningKeyVaultName string = deployMachineLearning ? machineLearning!.outputs.keyVaultName : ''

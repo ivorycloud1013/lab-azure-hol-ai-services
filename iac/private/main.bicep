@@ -4,15 +4,17 @@ metadata description = '''
 rg-<기본이름>-private 이라는 전용 리소스 그룹을 만들고, 모든 리소스를 그 안에 배포한다.
 다른 시스템의 리소스를 참조하지 않으므로 배포 순서를 지킬 필요가 없다.
 
-이 시스템이 만드는 리소스 — 하나의 VNet 안에 Foundry 와 VM 만 배포한다.
-  - Virtual Network (Bastion / Private Endpoint / 점프박스용 서브넷)
+이 시스템이 만드는 리소스 — 하나의 VNet 안에 Foundry 와 AML 과 VM 을 배포한다.
+  - Virtual Network (Bastion / Private Endpoint / 점프박스 / AML용 서브넷)
   - 모든 서브넷에 연결되는 NSG (기본은 전부 차단, 필요한 통신만 허용)
   - Azure Bastion 과 점프박스 VM
   - Azure AI Foundry (publicNetworkAccess=Disabled, networkAcls.bypass=None)
     + Private Endpoint + Private DNS Zone
+  - Azure Machine Learning 워크스페이스 + 스토리지 + Key Vault (deployMachineLearning=true 일 때)
+    셋 다 전용 서브넷 snet-aml 의 Private Endpoint 로만 접근한다.
   - "모든 서브넷에 NSG를 연결해야 한다"를 검사하는 Azure Policy
 
-접근 경로: 실습자 노트북 -> Azure Bastion -> 점프박스 VM -> Private Endpoint -> Foundry
+접근 경로: 실습자 노트북 -> Azure Bastion -> 점프박스 VM -> Private Endpoint -> Foundry / AML
 
 이 시스템에는 방화벽이 없다.
   점프박스에서 나가는 트래픽은 NSG가 IP 대역과 포트 수준까지만 확인하고, 인터넷으로 바로 나간다.
@@ -95,6 +97,26 @@ param modelDeployments modelDeploymentConfig[] = [
   }
 ]
 
+@description('''
+Azure Machine Learning 워크스페이스를 함께 배포할지 여부.
+
+true 면 같은 VNet 안에 AML 전용 서브넷(snet-aml)을 만들고, 그 서브넷에 워크스페이스와
+연결 리소스(스토리지 · Key Vault)의 Private Endpoint 를 놓는다. 셋 다 공용 엔드포인트는 닫힌다.
+''')
+param deployMachineLearning bool = true
+
+@description('''
+AML 워크스페이스의 관리형 네트워크 격리 모드. 컴퓨팅이 놓일 네트워크를 결정한다.
+
+컴퓨팅 인스턴스와 클러스터는 이 VNet 이 아니라 Azure 가 관리하는 별도 VNet 에 만들어지고,
+스토리지 · Key Vault 에는 관리형 Private Endpoint 로 접근한다.
+  AllowInternetOutbound     : 아웃바운드 인터넷 허용 (pip install 등이 그대로 동작)
+  AllowOnlyApprovedOutbound : 승인한 대상으로만 아웃바운드 허용
+  Disabled                  : 관리형 네트워크를 쓰지 않음
+''')
+@allowed(['Disabled', 'AllowInternetOutbound', 'AllowOnlyApprovedOutbound'])
+param machineLearningIsolationMode string = 'AllowInternetOutbound'
+
 @description('이 시스템 전용 Log Analytics 작업 영역을 만들지 여부')
 param deployLogAnalytics bool = false
 
@@ -125,6 +147,7 @@ var resourceGroupName = 'rg-${resourceGroupBaseName}-${STACK_SUFFIX}'
 var bastionSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 26, 0)
 var privateEndpointSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 24, 1)
 var jumpboxSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 24, 2)
+var machineLearningSubnetPrefix = cidrSubnet(privateVnetAddressPrefix, 24, 3)
 
 resource privateResourceGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: resourceGroupName
@@ -162,6 +185,9 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     bastionSubnetPrefix: bastionSubnetPrefix
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
     jumpboxSubnetPrefix: jumpboxSubnetPrefix
+    // 빈 문자열을 넘기면 AML 서브넷과 워크스페이스를 만들지 않는다.
+    machineLearningSubnetPrefix: deployMachineLearning ? machineLearningSubnetPrefix : ''
+    machineLearningIsolationMode: machineLearningIsolationMode
     jumpboxRouteTableId: ''
     bastionSkuName: bastionSkuName
     privateEndpointNetworkPolicies: privateEndpointNetworkPolicies
@@ -230,3 +256,15 @@ output BASTION_NAME string = workload.outputs.bastionName
 
 @description('NSG가 연결되지 않은 서브넷 목록. 이 시스템에는 플랫폼 예외가 없으므로 비어 있어야 한다.')
 output SUBNETS_WITHOUT_NSG array = workload.outputs.subnetsWithoutNsg
+
+@description('AML 워크스페이스를 배포했는지 여부')
+output MACHINE_LEARNING_DEPLOYED bool = workload.outputs.machineLearningDeployed
+
+@description('AML 워크스페이스 이름. 점프박스에서만 접근된다.')
+output ML_WORKSPACE_NAME string = workload.outputs.machineLearningWorkspaceName
+
+@description('AML 기본 데이터스토어 스토리지 계정 이름')
+output ML_STORAGE_ACCOUNT_NAME string = workload.outputs.machineLearningStorageAccountName
+
+@description('AML Key Vault 이름')
+output ML_KEY_VAULT_NAME string = workload.outputs.machineLearningKeyVaultName

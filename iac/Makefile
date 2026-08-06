@@ -245,6 +245,9 @@ verify-private:
 	@echo "점프박스 / Bastion:"
 	@az deployment sub show --name $(RGBASENAME)-private \
 	  --query '{jumpbox:properties.outputs.JUMPBOX_NAME.value,bastion:properties.outputs.BASTION_NAME.value}' -o table
+	@echo "Azure Machine Learning:"
+	@az deployment sub show --name $(RGBASENAME)-private \
+	  --query '{workspace:properties.outputs.ML_WORKSPACE_NAME.value,storage:properties.outputs.ML_STORAGE_ACCOUNT_NAME.value,keyvault:properties.outputs.ML_KEY_VAULT_NAME.value}' -o table
 
 # ---------------------------------------------------------------------------
 # 시스템 3 — Private 망 + 아웃바운드 도메인 제한

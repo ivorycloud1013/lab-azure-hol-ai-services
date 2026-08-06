@@ -27,7 +27,10 @@ flowchart TB
         prvJb["snet-jumpbox<br/>점프박스 VM"]
         prvPe["snet-private-endpoint<br/>Private Endpoint"]
         prvAi["Azure AI Foundry<br/>공용 엔드포인트 차단"]
+        prvAml["snet-aml<br/>Private Endpoint"]
+        prvMl["Azure Machine Learning<br/>워크스페이스 · 스토리지 · Key Vault<br/>공용 엔드포인트 차단"]
         prvBas --> prvJb --> prvPe --> prvAi
+        prvJb --> prvAml --> prvMl
     end
 
     subgraph PWL["시스템 3 · rg-RGBASENAME-private-whitelist · VNet 10.30.0.0/16"]
@@ -108,6 +111,11 @@ az deployment sub create -n $RGBASENAME-private -l $REGION \
 
 점프박스 VM에는 Bastion으로 접속합니다. VM에서 외부로 나가는 트래픽은 NSG가
 IP 대역과 포트 수준까지만 확인하고 인터넷으로 바로 나갑니다.
+
+이 시스템은 같은 VNet의 **별도 서브넷 `snet-aml`(10.20.3.0/24)** 에 Azure Machine Learning
+워크스페이스와 그 연결 리소스(스토리지 · Key Vault)의 Private Endpoint를 함께 배포합니다
+(`deployMachineLearning=true`, 기본값). 컴퓨팅은 워크스페이스의 관리형 네트워크에 만들어집니다.
+자세한 내용은 [private/README.md](private/README.md#azure-machine-learning)를 참고하세요.
 
 ### 시스템 3 — Private + 아웃바운드 도메인 제한
 
@@ -231,17 +239,27 @@ az deployment sub create -n $RGBASENAME-private-whitelist -l $REGION \
 modules/
 ├── network/    nsg, vnet, route-table, firewall-policy, firewall, bastion,
 │               private-dns-zone, private-endpoint
-├── ai/         foundry-account, foundry-project, model-deployments
+├── ai/         foundry-account, foundry-project, model-deployments,
+│               machine-learning-workspace
+├── storage/    storage-account
+├── security/   key-vault
 ├── compute/    jumpbox
-├── identity/   role-definitions, foundry-role-assignments
+├── identity/   role-definitions, foundry-role-assignments,
+│               machine-learning-role-assignments
 ├── monitor/    log-analytics
 ├── governance/ subnet-nsg-policy, policy-assignment
 └── workload/   private-foundry-workload   ← private / private-whitelist 공통 구성
+                machine-learning           ← private 에서만 쓰는 AML 묶음
 ```
 
 `workload/private-foundry-workload.bicep`은 리소스 하나가 아니라 **여러 리소스를 한 번에 만드는
 모듈(composite module)** 입니다. VNet, NSG, Bastion, 점프박스 VM, Foundry(Private Endpoint와 DNS 포함),
 역할 할당을 함께 만들며, 시스템 2와 시스템 3이 이 모듈을 공유합니다.
+
+`workload/machine-learning.bicep`도 같은 성격의 composite module로, AML 워크스페이스와 그 연결
+리소스(스토리지 · Key Vault), 각각의 Private Endpoint와 DNS 존, 역할 할당을 함께 만듭니다.
+두 시스템의 차이는 `machineLearningSubnetPrefix` 매개변수 하나로만 표현됩니다. private 시스템은
+`10.20.3.0/24`를 넘겨 AML을 배포하고, private-whitelist 시스템은 빈 문자열을 넘겨 배포하지 않습니다.
 
 ---
 
@@ -527,7 +545,8 @@ westus3 리전에서 `resourceGroupBaseName=holv3`으로 실행한 결과입니�
 - 각 시스템이 **자기 리소스 그룹 하나만** 변경합니다
   (`rg-holv3-public` / `rg-holv3-private` / `rg-holv3-private-whitelist`)
 - private 시스템에는 방화벽과 Route Table 관련 리소스가 **0건**입니다.
-  서브넷도 3개(`AzureBastionSubnet`, `snet-private-endpoint`, `snet-jumpbox`)뿐이며
+  서브넷은 `AzureBastionSubnet`, `snet-private-endpoint`, `snet-jumpbox` 3개이고
+  (AML을 켜면 `snet-aml`이 더해져 4개)
   **모두 NSG가 연결돼 있고 Route Table은 없습니다**
 - private-whitelist 시스템은 `AzureFirewallSubnet`(10.30.0.0/26)과
   `AzureFirewallManagementSubnet`(10.30.0.64/26)을 자기 VNet에 만들고,

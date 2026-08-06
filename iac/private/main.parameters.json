@@ -29,6 +29,12 @@
     "vmSize": {
       "value": "${VM_SIZE=Standard_D2s_v5}"
     },
+    "deployMachineLearning": {
+      "value": "${DEPLOY_MACHINE_LEARNING=true}"
+    },
+    "machineLearningIsolationMode": {
+      "value": "${MACHINE_LEARNING_ISOLATION_MODE=AllowInternetOutbound}"
+    },
     "deployLogAnalytics": {
       "value": "${DEPLOY_LOG_ANALYTICS=false}"
     },
