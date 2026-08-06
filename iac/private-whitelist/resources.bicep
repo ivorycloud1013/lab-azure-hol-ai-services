@@ -26,6 +26,9 @@ param namePrefix string
 @description('리소스 이름 접미사. 시스템을 구분한다.')
 param nameSuffix string
 
+@description('Foundry 계정 이름에 쓰는 짧은 시스템 약어. 예: privwl')
+param systemAbbrev string
+
 @description('전역 고유 이름에 사용할 토큰')
 param resourceToken string
 
@@ -174,6 +177,7 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
   params: {
     namePrefix: namePrefix
     nameSuffix: nameSuffix
+    systemAbbrev: systemAbbrev
     resourceToken: resourceToken
     location: location
     tags: tags
@@ -190,7 +194,7 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     vmAdminPassword: vmAdminPassword
     labUserPrincipalId: labUserPrincipalId
     labUserPrincipalType: labUserPrincipalType
-    projectName: 'proj-private-whitelist'
+    projectName: 'proj-${systemAbbrev}-${location}'
     projectDisplayName: 'Private 망 + 접속 허용 도메인 제한 실습 프로젝트'
     projectDescription: 'Private Endpoint 로만 접근할 수 있고, 아웃바운드는 방화벽이 허용한 도메인으로만 나갈 수 있는 Foundry 프로젝트'
     modelDeployments: modelDeployments

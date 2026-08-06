@@ -107,6 +107,9 @@ param subnetNsgPolicyEffect string = 'Audit'
 
 var STACK_SUFFIX = 'private'
 
+// Foundry 계정 이름 전용 약어. 이름에 리전까지 넣어도 64자를 넘지 않게 한다.
+var SYSTEM_ABBREV = 'priv'
+
 var namePrefix = toLower(resourceGroupBaseName)
 var resourceToken = toLower(uniqueString(subscription().id, resourceGroupBaseName, location, STACK_SUFFIX))
 
@@ -150,6 +153,7 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
   params: {
     namePrefix: namePrefix
     nameSuffix: STACK_SUFFIX
+    systemAbbrev: SYSTEM_ABBREV
     resourceToken: resourceToken
     location: location
     tags: defaultTags
@@ -166,7 +170,7 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     vmAdminPassword: vmAdminPassword
     labUserPrincipalId: labUserPrincipalId
     labUserPrincipalType: labUserPrincipalType
-    projectName: 'proj-private'
+    projectName: 'proj-${SYSTEM_ABBREV}-${location}'
     projectDisplayName: 'Private 망 실습 프로젝트'
     projectDescription: 'Private Endpoint 경유로만 접근 가능한 Foundry 프로젝트'
     modelDeployments: modelDeployments

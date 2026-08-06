@@ -47,6 +47,15 @@ param namePrefix string
 @description('리소스 이름 접미사. 시스템을 구분한다. 예: private, private-whitelist')
 param nameSuffix string
 
+@description('''
+Foundry 계정 이름에 쓰는 짧은 시스템 약어. 예: priv, privwl
+
+Foundry 계정 이름은 64자를 넘을 수 없고 전역 고유 DNS 이름이기도 하다.
+nameSuffix(private-whitelist)를 그대로 쓰면 리전 이름까지 붙였을 때 한계를 넘으므로
+계정 이름에서만 약어를 쓴다. 나머지 리소스는 nameSuffix를 그대로 쓴다.
+''')
+param systemAbbrev string
+
 @description('전역 고유 이름에 사용할 토큰')
 param resourceToken string
 
@@ -444,7 +453,9 @@ module privateDnsZones '../network/private-dns-zone.bicep' = [
 // Azure AI Foundry (완전 비공개)
 // ---------------------------------------------------------------------------
 
-var foundryAccountName = 'aif-${stackName}-${resourceToken}'
+// 계정 이름에 리전을 넣어, 같은 리소스 그룹에 여러 리전의 Foundry를 둘 수 있게 한다.
+// 최대 길이: aif-(4) + namePrefix(16) + -(1) + systemAbbrev(6) + -(1) + location(18) + -(1) + token(13) = 60자
+var foundryAccountName = 'aif-${namePrefix}-${systemAbbrev}-${location}-${resourceToken}'
 
 module foundry '../ai/foundry-account.bicep' = {
   name: 'foundry-account-${nameSuffix}'

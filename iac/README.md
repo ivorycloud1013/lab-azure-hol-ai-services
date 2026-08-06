@@ -147,6 +147,18 @@ make deploy-private-whitelist  # 시스템 3 (배포 후 검증까지 자동 실
 출력값 전체는 `make outputs-public`입니다. 삭제는 실수를 막기 위해
 `make destroy-public CONFIRM=yes`처럼 `CONFIRM=yes`가 있어야 동작합니다.
 
+#### 이미 있는 리소스 그룹에 다른 리전 Foundry 추가하기
+
+리소스 그룹은 리전에 묶이지 않으므로, 이미 배포한 시스템에 다른 리전의 Foundry를
+덧붙일 수 있습니다. 네트워크는 새로 만들지 않고 기존 것을 재사용합니다.
+
+```bash
+make deploy-foundry-region TARGET_SYSTEM=private FOUNDRY_REGION=swedencentral
+```
+
+private 계열이면 기존 VNet에 Private Endpoint를 만들어 기존 Private DNS Zone에
+등록합니다. 자세한 내용은 [foundry-region/README.md](foundry-region/README.md)를 보세요.
+
 #### SkuNotAvailable로 실패할 때
 
 점프박스 VM 크기는 리전과 구독에 따라 용량이 부족할 수 있습니다.

@@ -190,6 +190,9 @@ param subnetNsgPolicyEffect string = 'Audit'
 
 var STACK_SUFFIX = 'private-whitelist'
 
+// Foundry 계정 이름 전용 약어. 이름에 리전까지 넣어도 64자를 넘지 않게 한다.
+var SYSTEM_ABBREV = 'privwl'
+
 var namePrefix = toLower(resourceGroupBaseName)
 var resourceToken = toLower(uniqueString(subscription().id, resourceGroupBaseName, location, STACK_SUFFIX))
 
@@ -235,6 +238,7 @@ module resources './resources.bicep' = {
   params: {
     namePrefix: namePrefix
     nameSuffix: STACK_SUFFIX
+    systemAbbrev: SYSTEM_ABBREV
     resourceToken: resourceToken
     location: location
     tags: defaultTags

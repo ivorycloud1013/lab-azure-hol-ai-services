@@ -129,6 +129,10 @@ help:
 	@echo "    make deploy-private               시스템 2 — Private 망 (아웃바운드 제한 없음)"
 	@echo "    make deploy-private-whitelist     시스템 3 — Private 망 + 아웃바운드 도메인 제한"
 	@echo
+	@echo "  추가 리전 Foundry (이미 배포된 리소스 그룹에 덧붙임)"
+	@echo "    make deploy-foundry-region TARGET_SYSTEM=private FOUNDRY_REGION=swedencentral"
+	@echo "    make outputs-foundry-region TARGET_SYSTEM=private FOUNDRY_REGION=swedencentral"
+	@echo
 	@echo "  미리보기 (배포하지 않고 변경 사항만 계산)"
 	@echo "    make whatif-public / whatif-private / whatif-private-whitelist"
 	@echo
@@ -289,6 +293,72 @@ verify-private-whitelist:
 	@echo "허용 FQDN 개수:"
 	@az deployment sub show --name $(RGBASENAME)-private-whitelist \
 	  --query properties.outputs.ALLOWED_FQDN_COUNT.value -o tsv
+
+# ---------------------------------------------------------------------------
+# 추가 리전 Foundry — 이미 있는 리소스 그룹에 다른 리전 Foundry를 덧붙인다
+# ---------------------------------------------------------------------------
+
+# 대상 시스템은 먼저 배포돼 있어야 한다. 네트워크는 새로 만들지 않고 재사용한다.
+#   make deploy-foundry-region TARGET_SYSTEM=private FOUNDRY_REGION=swedencentral
+define require_foundry_region_args
+if [ -z "$(TARGET_SYSTEM)" ] || [ -z "$(FOUNDRY_REGION)" ]; then \
+  echo "ERROR: TARGET_SYSTEM 과 FOUNDRY_REGION 이 필요합니다."; \
+  echo "  TARGET_SYSTEM  : public | private | private-whitelist (이미 배포된 시스템)"; \
+  echo "  FOUNDRY_REGION : 추가할 Foundry 의 리전"; \
+  echo "예: make deploy-foundry-region TARGET_SYSTEM=private FOUNDRY_REGION=swedencentral"; \
+  exit 1; \
+fi
+endef
+
+# public 대상일 때만 공인 IP 가 필요하다. 나머지는 Private Endpoint 로 접근한다.
+define resolve_client_ip_if_public
+CLIENT_IP="$(CLIENT_IP)"; \
+if [ "$(TARGET_SYSTEM)" = "public" ] && [ -z "$$CLIENT_IP" ]; then \
+  CLIENT_IP=$$(curl -fsS --max-time 10 $(IP_LOOKUP_URL) || true); \
+  if [ -z "$$CLIENT_IP" ]; then \
+    echo "ERROR: 공인 IP 를 확인하지 못했습니다. CLIENT_IP=1.2.3.4 로 직접 지정하세요."; \
+    exit 1; \
+  fi; \
+fi
+endef
+
+.PHONY: deploy-foundry-region
+deploy-foundry-region: login
+	@$(require_foundry_region_args)
+	@$(resolve_principal_id); \
+	$(resolve_client_ip_if_public); \
+	echo "배포: rg-$(RGBASENAME)-$(TARGET_SYSTEM) 에 $(FOUNDRY_REGION) 리전 Foundry 추가"; \
+	az deployment sub create \
+	  --name $(RGBASENAME)-$(TARGET_SYSTEM)-foundry-$(FOUNDRY_REGION) \
+	  --location $(FOUNDRY_REGION) \
+	  --template-file foundry-region/main.bicep \
+	  --parameters resourceGroupBaseName=$(RGBASENAME) \
+	               targetSystem=$(TARGET_SYSTEM) \
+	               location=$(FOUNDRY_REGION) \
+	               labClientIpAddress="$$CLIENT_IP" \
+	               labUserPrincipalId="$$PRINCIPAL_ID"
+
+.PHONY: whatif-foundry-region
+whatif-foundry-region: login
+	@$(require_foundry_region_args)
+	@$(resolve_principal_id); \
+	$(resolve_client_ip_if_public); \
+	az deployment sub what-if \
+	  --name $(RGBASENAME)-$(TARGET_SYSTEM)-foundry-$(FOUNDRY_REGION) \
+	  --location $(FOUNDRY_REGION) \
+	  --template-file foundry-region/main.bicep \
+	  --parameters resourceGroupBaseName=$(RGBASENAME) \
+	               targetSystem=$(TARGET_SYSTEM) \
+	               location=$(FOUNDRY_REGION) \
+	               labClientIpAddress="$$CLIENT_IP" \
+	               labUserPrincipalId="$$PRINCIPAL_ID"
+
+.PHONY: outputs-foundry-region
+outputs-foundry-region:
+	@$(require_foundry_region_args)
+	@az deployment sub show \
+	  --name $(RGBASENAME)-$(TARGET_SYSTEM)-foundry-$(FOUNDRY_REGION) \
+	  --query properties.outputs -o json
 
 # ---------------------------------------------------------------------------
 # 리전에서 쓸 수 있는 VM 크기 확인
