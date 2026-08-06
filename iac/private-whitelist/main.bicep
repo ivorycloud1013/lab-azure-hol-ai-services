@@ -115,13 +115,18 @@ param threatIntelMode string = 'Alert'
 // 접속 허용 목록 — 점프박스가 어떤 도메인으로 나갈 수 있는지 정한다
 // ---------------------------------------------------------------------------
 
-@description('L4로 허용할 Azure 서비스 태그 목록')
-param allowedServiceTags string[] = [
-  'AzureActiveDirectory'
-  'AzureResourceManager'
-  'AzureMonitor'
-  'AzureFrontDoor.FirstParty'
-]
+@description('''
+L4(네트워크 규칙)로 허용할 Azure 서비스 태그 목록. 기본값은 비어 있다.
+
+Azure Firewall은 네트워크 규칙을 애플리케이션 규칙보다 먼저 평가하고 매치되면 종료한다.
+서비스 태그를 여기에 넣으면 그 IP 범위로 가는 트래픽은 FQDN 검사를 건너뛰고,
+방화벽 로그에도 FQDN이 남지 않는다.
+
+이 시스템의 목적은 로그를 보고 "고객 방화벽에 어떤 FQDN을 열어야 하는가"를 도출하는 것이다.
+그래서 기본적으로 네트워크 규칙을 만들지 않고 모든 아웃바운드를 FQDN으로 판정한다.
+HTTP/HTTPS가 아니라 FQDN으로 다룰 수 없는 트래픽이 있을 때만 채운다.
+''')
+param allowedServiceTags string[] = []
 
 @description('Entra ID 인증 및 Azure 관리 평면 FQDN 화이트리스트')
 param identityAndManagementFqdns string[] = [

@@ -113,7 +113,15 @@ resource policy 'Microsoft.Network/firewallPolicies@2025-07-01' = {
   }
 }
 
-resource networkAllowRules 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-07-01' = {
+// 네트워크 규칙은 기본적으로 만들지 않는다(allowedServiceTags 기본값이 빈 배열).
+//
+// Azure Firewall은 규칙 종류를 priority보다 먼저 본다. 모든 네트워크 규칙을 평가한 뒤에야
+// 애플리케이션 규칙으로 넘어가고, 매치되는 순간 종료된다. 따라서 네트워크 규칙으로
+// 서비스 태그를 허용하면 그 트래픽은 FQDN 검사를 건너뛰고, 로그에도 FQDN이 남지 않는다.
+//
+// 이 시스템의 목적은 "어떤 FQDN을 열어야 하는가"를 로그로 도출하는 것이다.
+// 그러려면 모든 아웃바운드가 애플리케이션 규칙에서 판정돼야 하므로 네트워크 규칙을 비운다.
+resource networkAllowRules 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-07-01' = if (!empty(allowedServiceTags)) {
   parent: policy
   name: 'rcg-network-allow'
   properties: {
@@ -229,27 +237,44 @@ resource additionalApplicationAllowRules 'Microsoft.Network/firewallPolicies/rul
   ]
 }
 
+// 허용 목록에 없는 것을 명시적으로 거부하고 로그에 남긴다.
+//
+// 반드시 ApplicationRule이어야 한다. NetworkRule로 만들면 규칙 종류 우선순위 때문에
+// priority 400이어도 priority 300의 애플리케이션 허용 규칙보다 먼저 평가되어
+// FQDN 허용 목록 전체를 무력화한다. 애플리케이션 규칙끼리는 priority가 정상 동작하므로
+// 허용(300·350)이 먼저 평가되고 남은 것만 여기서 거부된다.
+//
+// Azure Firewall은 매치되는 규칙이 없으면 어차피 거부한다. 이 규칙의 목적은 차단 자체가
+// 아니라, 거부된 FQDN을 로그로 남겨 "무엇을 더 열어야 하는지" 알 수 있게 하는 것이다.
 resource denyAllRules 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-07-01' = {
   parent: policy
   name: 'rcg-deny-all'
   properties: {
-    priority: 400
+    priority: 500
     ruleCollections: [
       {
         ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
         name: 'deny-all'
-        priority: 410
+        priority: 510
         action: {
           type: 'Deny'
         }
         rules: [
           {
-            ruleType: 'NetworkRule'
-            name: 'deny-all-outbound'
-            sourceAddresses: ['*']
-            destinationAddresses: ['*']
-            destinationPorts: ['*']
-            ipProtocols: ['Any']
+            ruleType: 'ApplicationRule'
+            name: 'deny-all-fqdn'
+            sourceAddresses: sourceAddresses
+            targetFqdns: ['*']
+            protocols: [
+              {
+                protocolType: 'Http'
+                port: 80
+              }
+              {
+                protocolType: 'Https'
+                port: 443
+              }
+            ]
           }
         ]
       }
