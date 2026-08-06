@@ -47,9 +47,17 @@ resource bastion 'Microsoft.Network/bastionHosts@2025-07-01' = {
     name: skuName
   }
   properties: {
-    // Basic SKU는 아래 기능 플래그를 지원하지 않으므로 Standard일 때만 켠다.
-    enableTunneling: isStandardSku ? true : null
-    enableIpConnect: isStandardSku ? true : null
+    // Basic SKU는 아래 기능 플래그를 지원하지 않는다.
+    // 삼항 연산자로 null을 넣으면 ARM 템플릿에 "enableTunneling": null 이 그대로 실려
+    // Bastion 리소스 공급자가 "Error converting value {null} to type 'System.Boolean'"
+    // 으로 거부한다. 값을 null로 두는 것과 속성을 아예 빼는 것은 다르므로,
+    // 스프레드로 Standard일 때만 속성 자체를 포함시킨다.
+    ...(isStandardSku
+      ? {
+          enableTunneling: true
+          enableIpConnect: true
+        }
+      : {})
     ipConfigurations: [
       {
         name: 'ipconfig-bastion'

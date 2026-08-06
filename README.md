@@ -1,74 +1,90 @@
 # lab-azure-hol-ai-services
 
-Azure AI Foundry를 **Public 망 / Private 망**으로 나눠 배포하고, 두 망의 접근 통제 차이를
-직접 비교해 보는 핸즈온 랩(HOL)이다. 인증은 양쪽 모두 **keyless(Entra ID + RBAC)** 로 구성한다.
+Azure AI Foundry를 세 가지 네트워크 구성으로 배포해 보고, 접근 통제 방식의 차이를 직접 비교하는
+핸즈온 랩(HOL, Hands-on Lab)입니다.
 
-## 3개의 독립 시스템
+세 구성 모두 **API 키를 사용하지 않습니다.** Entra ID로 발급받은 토큰과 RBAC 역할 할당으로만
+Foundry를 호출합니다(keyless 인증).
 
-각 스택은 **자기 리소스 그룹만 만들고, 자기 IaC 루트를 가지며, 따로 배포·갱신·삭제된다.**
+## 세 개의 독립적인 시스템
 
-| 스택 | 리소스 그룹 | 소유하는 것 | 의존 |
+여기서 **시스템**은 한 번의 명령으로 배포되고 한 번에 삭제되는 단위를 뜻합니다.
+이 저장소의 세 시스템은 각자 자기 리소스 그룹만 만들고,
+자기 Bicep 진입점(`main.bicep`)을 가지며, 서로의 리소스를 참조하지 않습니다.
+따라서 **배포 순서를 지킬 필요가 없고, 하나를 삭제해도 나머지는 그대로 동작합니다.**
+
+| 시스템 | 리소스 그룹 | 만드는 리소스 | 다른 시스템 의존 |
 |---|---|---|---|
-| [`iac/public/`](iac/public/) | `rg-<env>-public` | Public VNet, Foundry(공용 + IP 화이트리스트), 모델, RBAC | 없음 |
-| [`iac/private/`](iac/private/) | `rg-<env>-private` | Private VNet, NSG, UDR, Bastion, 점프박스, Foundry(비공개) + PE + DNS | 없음 |
-| [`iac/whitelist/`](iac/whitelist/) | `rg-<env>-whitelist` | Firewall Policy(FQDN 화이트리스트), Azure Firewall | `private` 먼저 |
+| [`iac/public/`](iac/public/) | `rg-<RGBASENAME>-public` | VNet, Foundry(공용 접근 + 허용 IP 제한), 모델 배포, 역할 할당 | 없음 |
+| [`iac/private/`](iac/private/) | `rg-<RGBASENAME>-private` | VNet, NSG, Bastion, 점프박스 VM, Foundry(공용 접근 차단) + Private Endpoint + Private DNS | 없음 |
+| [`iac/private-whitelist/`](iac/private-whitelist/) | `rg-<RGBASENAME>-private-whitelist` | private과 같은 리소스 + Route Table + Firewall Policy + Azure Firewall | 없음 |
 
-스택 간 결합은 단 하나다 — Azure Firewall은 private 망 VNet의 `AzureFirewallSubnet`에 들어가야 하므로
-배포 순서가 **private → whitelist** 다. public은 완전히 독립이다.
+`RGBASENAME`은 리소스 그룹 이름에 들어가는 값입니다. 예를 들어 `hol01`을 넘기면
+`rg-hol01-public`, `rg-hol01-private`, `rg-hol01-private-whitelist` 세 개가 만들어집니다.
 
-whitelist 스택을 지우면 같은 private 망이 **완전 차단 상태**로 돌아가고, 다시 배포하면 화이트리스트대로 뚫린다.
-스택을 나눈 덕에 가능한 시연이다.
+**시스템 2와 시스템 3은 구성이 같고, 아웃바운드(외부로 나가는 통신) 통제 방식만 다릅니다.**
+두 시스템을 같은 구독에 동시에 배포한 뒤 각 점프박스에서 같은 명령을 실행하면,
+도메인 제한이 있을 때와 없을 때의 차이를 바로 확인할 수 있습니다.
+
+두 시스템이 공통으로 쓰는 리소스 구성은 `iac/modules/workload/private-foundry-workload.bicep`
+한 파일에 모아 두었습니다. 같은 내용을 양쪽에 복사해 두면 한쪽만 수정했을 때
+보안 설정이 서로 어긋나기 때문입니다.
 
 ## 통제 방식 비교
 
-| | Public 망 | Private 망 |
-|---|---|---|
-| 접근 경로 | 노트북 → 인터넷 | 노트북 → Bastion → 점프박스 VM → Private Endpoint |
-| Foundry 노출 | `publicNetworkAccess=Enabled` + IP 화이트리스트 | `publicNetworkAccess=Disabled` |
-| Azure 서비스 우회 | `bypass=AzureServices` | `bypass=None` (Azure도 차단) |
-| 아웃바운드 | 제한 없음 | UDR 강제 터널링 → Azure Firewall FQDN 화이트리스트 |
-| NSG | 모든 서브넷 + deny-all 기본 | 모든 서브넷 + deny-all 기본 |
-| 인증 | keyless (`disableLocalAuth=true`) | keyless (`disableLocalAuth=true`) |
+| | Public 망 | Private 망 | Private + 도메인 제한 |
+|---|---|---|---|
+| 접근 경로 | 노트북 → 인터넷 → Foundry | 노트북 → Bastion → 점프박스 VM → Private Endpoint → Foundry | 왼쪽과 동일 |
+| Foundry 공용 엔드포인트 | 열림(`publicNetworkAccess=Enabled`)이지만 등록된 IP만 허용 | 닫힘(`Disabled`) | 닫힘(`Disabled`) |
+| Azure 서비스 예외 통과 | 허용(`bypass=AzureServices`) | 차단(`bypass=None`) | 차단(`bypass=None`) |
+| **아웃바운드 도메인 제한** | 없음 | **없음** — NSG가 IP 대역과 포트까지만 확인 | **있음** — Azure Firewall이 허용 도메인만 통과 |
+| NSG | 모든 서브넷에 연결, 기본은 전부 차단 | 동일 | 동일 |
+| 인증 | keyless (`disableLocalAuth=true`) | keyless | keyless |
 
 ## 빠른 시작
 
 ```bash
 az login
-export ENV=hol01 LOC=westus3
+export RGBASENAME=hol01 REGION=westus3
 
-# 1) Public (독립)
-az deployment sub create -n $ENV-public -l $LOC --template-file iac/public/main.bicep \
-  --parameters resourceGroupBaseName=$ENV location=$LOC \
+# 1) Public
+az deployment sub create -n $RGBASENAME-public -l $REGION --template-file iac/public/main.bicep \
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION \
                labClientIpAddress="$(curl -s ifconfig.me)" \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)"
 
-# 2) Private
-az deployment sub create -n $ENV-private -l $LOC --template-file iac/private/main.bicep \
-  --parameters resourceGroupBaseName=$ENV location=$LOC \
+# 2) Private (아웃바운드 도메인 제한 없음)
+az deployment sub create -n $RGBASENAME-private -l $REGION --template-file iac/private/main.bicep \
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION \
                labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
                vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 
-# 3) Whitelist (private 출력을 입력으로)
-PRV=$(az deployment sub show -n $ENV-private --query properties.outputs -o json)
-az deployment sub create -n $ENV-whitelist -l $LOC --template-file iac/whitelist/main.bicep \
-  --parameters resourceGroupBaseName=$ENV location=$LOC \
-               privateVnetResourceGroupName=$(echo $PRV | jq -r .PRIVATE_RESOURCE_GROUP.value) \
-               privateVnetName=$(echo $PRV | jq -r .PRIVATE_VNET_NAME.value) \
-               expectedFirewallPrivateIp=$(echo $PRV | jq -r .EXPECTED_FIREWALL_PRIVATE_IP.value)
+# 3) Private + 아웃바운드 도메인 제한
+az deployment sub create -n $RGBASENAME-private-whitelist -l $REGION \
+  --template-file iac/private-whitelist/main.bicep \
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION \
+               labUserPrincipalId="$(az ad signed-in-user show --query id -o tsv)" \
+               vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 ```
 
-각 스택 디렉터리는 독립된 azd 프로젝트이기도 하다 (`cd iac/private && azd up`).
+각 시스템 디렉터리는 Azure Developer CLI(azd) 프로젝트이기도 합니다. 해당 폴더로 이동해
+`azd up`을 실행해도 됩니다.
 
-기본 리전은 **westus3**, 기본 모델은 **gpt-5.4-mini** 다.
-(`gpt-4.x` 계열은 전 리전 Deprecating 상태라 신규 배포가 거부된다.)
+기본 리전은 **westus3**, 기본 모델은 **gpt-5.4-mini** 입니다.
+(`gpt-4.x` 계열 모델은 전 리전에서 지원 종료 예정 상태라 신규 배포가 거부됩니다.)
+
+VNet 주소 대역은 서로 겹치지 않게 나눠 두었습니다 — public `10.10.0.0/16`,
+private `10.20.0.0/16`, private-whitelist `10.30.0.0/16`.
 
 ## 문서
 
-- **[iac/README.md](iac/README.md)** — 아키텍처, 배포 순서, 설계 결정과 제약, 실습 시나리오, 비용, 정리
-- 스택별 상세: [public](iac/public/README.md) · [private](iac/private/README.md) · [whitelist](iac/whitelist/README.md)
+- **[iac/README.md](iac/README.md)** — 아키텍처, 배포 방법, 설계 결정과 이유, 실습 시나리오, 비용, 리소스 정리
+- 시스템별 상세: [public](iac/public/README.md) · [private](iac/private/README.md) · [private-whitelist](iac/private-whitelist/README.md)
 
 ## 비용 주의
 
-Azure Firewall과 Bastion은 **유휴 상태에서도 시간당 과금**된다. 상시 과금 합계는 약 **$0.79/시간**
-(whitelist ~$0.41 + private ~$0.38). 실습을 쉬는 동안 **whitelist 스택만 지워도** 시간당 $0.41이 절약된다.
-끝나면 세 리소스 그룹을 모두 삭제한다.
+Azure Firewall과 Azure Bastion은 **사용하지 않고 켜 두기만 해도 시간당 요금이 부과됩니다.**
+세 시스템을 모두 배포해 두면 약 **시간당 $1.17**(private-whitelist 약 $0.79 + private 약 $0.38)입니다.
+
+비교 실습이 끝났다면 **private-whitelist 시스템만 삭제해도 시간당 약 $0.79가 절약됩니다.**
+실습을 마치면 세 리소스 그룹을 모두 삭제하세요.

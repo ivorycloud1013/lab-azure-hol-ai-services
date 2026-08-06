@@ -46,7 +46,7 @@ param labUserPrincipalId string = ''
 param labUserPrincipalType string = 'User'
 
 @description('Foundry 프로젝트 이름')
-param projectName string = 'proj-public'
+param projectName string = 'proj-pub-${location}'
 
 @description('배포할 모델 목록')
 param modelDeployments modelDeploymentConfig[]
@@ -120,7 +120,9 @@ module vnet '../modules/network/vnet.bicep' = {
   }
 }
 
-var foundryAccountName = 'aif-${namePrefix}-pub-${resourceToken}'
+// 계정 이름에 리전을 넣어, 같은 리소스 그룹에 여러 리전의 Foundry를 둘 수 있게 한다.
+// 최대 길이: aif-(4) + namePrefix(16) + -pub-(5) + location(18) + -(1) + token(13) = 57자
+var foundryAccountName = 'aif-${namePrefix}-pub-${location}-${resourceToken}'
 
 module foundry '../modules/ai/foundry-account.bicep' = {
   name: 'public-foundry-account'

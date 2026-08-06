@@ -86,17 +86,23 @@ resource firewall 'Microsoft.Network/azureFirewalls@2025-07-01' = {
         }
       }
     ]
-    managementIpConfiguration: hasManagementSubnet ? {
-      name: 'ipconfig-management'
-      properties: {
-        subnet: {
-          id: managementSubnetId
+    // bastion.bicep과 같은 이유로 null 대신 스프레드를 쓴다.
+    // 관리 서브넷이 없으면 속성 자체를 넣지 않는다.
+    ...(hasManagementSubnet
+      ? {
+          managementIpConfiguration: {
+            name: 'ipconfig-management'
+            properties: {
+              subnet: {
+                id: managementSubnetId
+              }
+              publicIPAddress: {
+                id: managementPublicIp.id
+              }
+            }
+          }
         }
-        publicIPAddress: {
-          id: managementPublicIp.id
-        }
-      }
-    } : null
+      : {})
   }
 }
 

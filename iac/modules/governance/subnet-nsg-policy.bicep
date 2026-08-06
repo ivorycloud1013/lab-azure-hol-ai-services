@@ -117,9 +117,14 @@ resource policyDefinition 'Microsoft.Authorization/policyDefinitions@2023-04-01'
   }
 }
 
+// 배포(deployment) 이름은 64자를 넘을 수 없다. policyAssignmentName 은 이미
+// 'assign-' 으로 시작하고 사용자가 정한 resourceGroupBaseName 까지 포함하므로,
+// 여기에 접두사를 한 번 더 붙이면 이름이 두 배로 길어져 한계를 넘는다.
+//   assign-assign-subnet-requires-nsg-hol-ai-services-private-whitelist (67자)
+// 이 모듈은 대상 리소스 그룹마다 한 번만 배포되므로 짧은 고정 이름이면 충분하다.
 module policyAssignment './policy-assignment.bicep' = {
   scope: resourceGroup(targetResourceGroupName)
-  name: 'assign-${policyAssignmentName}'
+  name: 'assign-subnet-nsg-policy'
   params: {
     name: policyAssignmentName
     displayName: '모든 서브넷은 NSG를 연결해야 함'

@@ -1,6 +1,6 @@
-# 스택 1/3 — Public 망
+# 시스템 1/3 — Public 망
 
-**리소스 그룹:** `rg-<env>-public` · **다른 스택 의존:** 없음 (언제든 단독 배포/삭제 가능)
+**리소스 그룹:** `rg-<RGBASENAME>-public` · **다른 시스템 의존:** 없음 (언제든 단독 배포/삭제 가능)
 
 실습자 노트북에서 인터넷을 통해 Foundry에 접근하되, **IP 화이트리스트로만** 허용하는 구성이다.
 
@@ -29,9 +29,9 @@ az deployment sub create -n hol01-public -l westus3 \
 |---|---|---|
 | `labClientIpAddress` | (필수) | 실습자 노트북 공인 IP. 비우면 아무도 접근 못 한다 |
 | `labUserPrincipalId` | `''` | 비우면 RBAC 역할 할당을 건너뛴다 → keyless 호출 불가 |
-| `vnetAddressPrefix` | `10.10.0.0/16` | private 스택(10.20.0.0/16)과 겹치면 안 된다 |
+| `vnetAddressPrefix` | `10.10.0.0/16` | private(10.20.0.0/16) · private-whitelist(10.30.0.0/16)와 겹치면 안 된다 |
 | `modelDeployments` | `gpt-5.4-mini` | `lifecycleStatus=GenerallyAvailable` 모델만 배포된다 |
-| `deployLogAnalytics` | `false` | 이 스택 전용 작업 영역 생성 여부 |
+| `deployLogAnalytics` | `false` | 이 시스템 전용 작업 영역 생성 여부 |
 
 ## 확인
 
