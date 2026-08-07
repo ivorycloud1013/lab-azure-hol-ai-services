@@ -104,6 +104,18 @@ param machineLearningIsolationMode string = 'AllowInternetOutbound'
 @description('점프박스 서브넷에 연결할 Route Table 리소스 ID. 빈 문자열이면 UDR 없이 인터넷 직통이다.')
 param jumpboxRouteTableId string = ''
 
+@description('''
+점프박스 서브넷에 NAT Gateway 를 붙여 아웃바운드 경로를 만들지 여부.
+
+공인 IP · NAT Gateway · Load Balancer 아웃바운드 규칙이 하나도 없는 VM 은 인터넷으로 나갈 수 없다.
+Azure 가 암묵적으로 붙여 주던 default outbound access 가 2025-09-30 자로 신규 배포에서 폐지됐기 때문이다.
+
+방화벽이 없는 private 시스템은 true 로 켜야 점프박스가 밖으로 나갈 수 있다.
+private-whitelist 시스템은 "0.0.0.0/0 -> 방화벽" 경로가 있고 방화벽이 자기 공인 IP 로 SNAT 하므로
+false 로 둔다. 둘을 함께 켜면 UDR 이 NAT Gateway 보다 우선해 NAT Gateway 가 무의미해진다.
+''')
+param deployJumpboxNatGateway bool = false
+
 @description('Azure Bastion SKU')
 @allowed(['Basic', 'Standard'])
 param bastionSkuName string = 'Basic'
@@ -474,6 +486,22 @@ module machineLearningNsg '../network/nsg.bicep' = if (deployMachineLearning) {
 }
 
 // ---------------------------------------------------------------------------
+// NAT Gateway - 점프박스의 아웃바운드 경로
+//
+// 방화벽이 없는 시스템에서만 켠다. 방화벽이 있는 시스템은 UDR 로 모든 아웃바운드를
+// 방화벽에 보내고 방화벽이 자기 공인 IP 로 SNAT 하므로 NAT Gateway 가 필요 없다.
+// ---------------------------------------------------------------------------
+
+module jumpboxNatGateway '../network/nat-gateway.bicep' = if (deployJumpboxNatGateway) {
+  name: 'nat-jumpbox-${nameSuffix}'
+  params: {
+    name: 'nat-${stackName}-jumpbox'
+    location: location
+    tags: tags
+  }
+}
+
+// ---------------------------------------------------------------------------
 // VNet
 // ---------------------------------------------------------------------------
 
@@ -495,6 +523,8 @@ var managedSubnets subnetConfig[] = [
     addressPrefix: jumpboxSubnetPrefix
     networkSecurityGroupId: jumpboxNsg.outputs.id
     routeTableId: jumpboxRouteTableId
+    // UDR 이 있으면 그쪽이 우선하므로, 두 시스템이 이 항목을 동시에 채우는 일은 없다.
+    natGatewayId: deployJumpboxNatGateway ? jumpboxNatGateway!.outputs.id : ''
   }
 ]
 
@@ -733,6 +763,12 @@ output jumpboxName string = jumpbox.outputs.name
 
 @description('점프박스 사설 IP')
 output jumpboxPrivateIpAddress string = jumpbox.outputs.privateIpAddress
+
+@description('''
+점프박스가 인터넷으로 나갈 때 SNAT 되는 공인 IP.
+NAT Gateway 를 켜지 않았으면 빈 문자열이다(방화벽이 있는 시스템은 방화벽 IP 로 나간다).
+''')
+output jumpboxOutboundIpAddress string = deployJumpboxNatGateway ? jumpboxNatGateway!.outputs.publicIpAddress : ''
 
 @description('Foundry 계정 이름')
 output foundryAccountName string = foundry.outputs.name

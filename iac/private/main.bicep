@@ -66,6 +66,21 @@ Private VNet 주소 공간.
 ''')
 param privateVnetAddressPrefix string = '10.20.0.0/16'
 
+@description('''
+점프박스 서브넷에 NAT Gateway 를 붙일지 여부.
+
+이 시스템에는 방화벽이 없어서, NAT Gateway 가 없으면 점프박스가 인터넷으로 나갈 수 없다.
+공인 IP · NAT Gateway · Load Balancer 아웃바운드 규칙이 하나도 없는 VM 에 Azure 가 암묵적으로
+붙여 주던 default outbound access 가 2025-09-30 자로 신규 배포에서 폐지됐기 때문이다.
+
+NAT Gateway 는 아웃바운드 전용이라 VM 에 인바운드 노출을 만들지 않으면서,
+나가는 트래픽을 고정된 공인 IP 하나(JUMPBOX_OUTBOUND_IP 출력값)로 SNAT 한다.
+
+시스템 3(private-whitelist)은 "0.0.0.0/0 -> 방화벽" 경로가 있고 방화벽이 자기 공인 IP 로
+SNAT 하므로 NAT Gateway 를 쓰지 않는다.
+''')
+param deployJumpboxNatGateway bool = true
+
 @description('Azure Bastion SKU')
 @allowed(['Basic', 'Standard'])
 param bastionSkuName string = 'Basic'
@@ -189,6 +204,8 @@ module workload '../modules/workload/private-foundry-workload.bicep' = {
     machineLearningSubnetPrefix: deployMachineLearning ? machineLearningSubnetPrefix : ''
     machineLearningIsolationMode: machineLearningIsolationMode
     jumpboxRouteTableId: ''
+    // 방화벽이 없는 시스템이므로, 점프박스의 아웃바운드 경로는 NAT Gateway 가 담당한다.
+    deployJumpboxNatGateway: deployJumpboxNatGateway
     bastionSkuName: bastionSkuName
     privateEndpointNetworkPolicies: privateEndpointNetworkPolicies
     vmSize: vmSize
@@ -250,6 +267,9 @@ output JUMPBOX_NAME string = workload.outputs.jumpboxName
 
 @description('점프박스 사설 IP')
 output JUMPBOX_PRIVATE_IP string = workload.outputs.jumpboxPrivateIpAddress
+
+@description('점프박스가 인터넷으로 나갈 때 SNAT 되는 고정 공인 IP. NAT Gateway를 끄면 빈 문자열이다.')
+output JUMPBOX_OUTBOUND_IP string = workload.outputs.jumpboxOutboundIpAddress
 
 @description('Azure Bastion 이름')
 output BASTION_NAME string = workload.outputs.bastionName

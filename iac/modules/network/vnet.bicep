@@ -22,6 +22,12 @@ type subnetConfig = {
   @description('연결할 Route Table 리소스 ID')
   routeTableId: string?
 
+  @description('''
+  연결할 NAT Gateway 리소스 ID. 이 서브넷의 아웃바운드 SNAT 경로가 된다.
+  AzureBastionSubnet 과 AzureFirewallSubnet 에는 연결하면 안 된다(각자 자기 공인 IP를 쓴다).
+  ''')
+  natGatewayId: string?
+
   @description('서비스 엔드포인트 목록. 예: [\'Microsoft.CognitiveServices\']')
   serviceEndpoints: string[]?
 
@@ -71,6 +77,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-07-01' = {
           }
           routeTable: empty(subnet.?routeTableId ?? '') ? null : {
             id: subnet.?routeTableId
+          }
+          natGateway: empty(subnet.?natGatewayId ?? '') ? null : {
+            id: subnet.?natGatewayId
           }
           // for-식은 중첩할 수 없으므로 map()으로 변환한다.
           serviceEndpoints: map(subnet.?serviceEndpoints ?? [], service => {

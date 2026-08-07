@@ -19,17 +19,32 @@
 | Azure 서비스 예외 통과 | 차단 (`networkAcls.bypass=None`) — 다른 Azure 서비스도 예외로 통과할 수 없습니다 |
 | 접근 경로 | Private Endpoint 만 (privatelink DNS 영역 3개 등록) |
 | NSG | 모든 서브넷에 연결. 기본은 전부 차단하고 필요한 통신만 허용 |
-| 아웃바운드 | Route Table 없음 — 인터넷으로 바로 나감 (도메인 제한 없음) |
+| 아웃바운드 | Route Table 없음 — NAT Gateway로 SNAT 되어 인터넷으로 바로 나감 (도메인 제한 없음) |
 | 거버넌스 | "모든 서브넷에 NSG를 연결해야 한다"를 검사하는 Azure Policy (기본값 `Audit`) |
 
 ## 서브넷 구성 (`10.20.0.0/16` 기준)
 
-| 서브넷 | 주소 대역 | 용도 | NSG | Route Table |
-|---|---|---|---|---|
-| `AzureBastionSubnet` | `10.20.0.0/26` | Azure Bastion | Bastion 필수 규칙 8개 + 기본 차단 | **연결하지 않음** (연결하면 Bastion 제어 트래픽이 끊깁니다) |
-| `snet-private-endpoint` | `10.20.1.0/24` | Foundry Private Endpoint | 기본 차단 + 점프박스에서 오는 443 허용 | 없음 |
-| `snet-jumpbox` | `10.20.2.0/24` | 점프박스 VM | 기본 차단 + 필요한 통신만 허용 | 없음 |
-| `snet-aml` | `10.20.3.0/24` | AML 워크스페이스 · 스토리지 · Key Vault의 Private Endpoint | 기본 차단 + 점프박스에서 오는 443 허용 | 없음 |
+| 서브넷 | 주소 대역 | 용도 | NSG | Route Table | NAT Gateway |
+|---|---|---|---|---|---|
+| `AzureBastionSubnet` | `10.20.0.0/26` | Azure Bastion | Bastion 필수 규칙 8개 + 기본 차단 | **연결하지 않음** (연결하면 Bastion 제어 트래픽이 끊깁니다) | **연결하지 않음** (Bastion은 자체 공인 IP로 나갑니다) |
+| `snet-private-endpoint` | `10.20.1.0/24` | Foundry Private Endpoint | 기본 차단 + 점프박스에서 오는 443 허용 | 없음 | 없음 (PE는 아웃바운드를 만들지 않습니다) |
+| `snet-jumpbox` | `10.20.2.0/24` | 점프박스 VM | 기본 차단 + 필요한 통신만 허용 | 없음 | **연결** — 점프박스의 유일한 아웃바운드 경로 |
+| `snet-aml` | `10.20.3.0/24` | AML 워크스페이스 · 스토리지 · Key Vault의 Private Endpoint | 기본 차단 + 점프박스에서 오는 443 허용 | 없음 | 없음 |
+
+### 점프박스의 아웃바운드 — NAT Gateway가 필요한 이유
+
+공인 IP도, NAT Gateway도, Load Balancer 아웃바운드 규칙도 없는 VM은 **인터넷으로 나갈 수 없습니다.**
+예전에는 Azure가 *default outbound access* 라는 이름으로 암묵적인 SNAT를 붙여 줬지만,
+이 동작은 **2025년 9월 30일자로 신규 배포에 대해 폐지**됐습니다.
+
+이 시스템에는 방화벽이 없으므로, 점프박스의 아웃바운드는 `snet-jumpbox`에 연결한 NAT Gateway가 담당합니다
+(`deployJumpboxNatGateway`, 기본값 `true`). NAT Gateway는 **아웃바운드 전용**이라 VM에 인바운드 노출을
+만들지 않으면서 나가는 트래픽을 고정 공인 IP 하나로 SNAT 합니다. 그 주소는 `JUMPBOX_OUTBOUND_IP`
+출력값으로 확인할 수 있고, 고객사 방화벽에 "이 실습 환경이 나가는 IP"로 제출할 수 있습니다.
+
+시스템 3(private-whitelist)은 `0.0.0.0/0 → 방화벽` 경로가 있고 **방화벽이 자기 공인 IP로 SNAT** 하므로
+NAT Gateway를 쓰지 않습니다. UDR이 NAT Gateway보다 우선하기 때문에 둘을 함께 켜면 NAT Gateway가
+무의미해집니다.
 
 `snet-aml`은 `deployMachineLearning=true`(기본값)일 때만 만들어집니다.
 Foundry용 서브넷과 분리해 둔 이유는, 두 서비스의 접근 경로를 NSG로 따로 통제하고
@@ -83,6 +98,7 @@ az deployment sub create -n hol01-private -l westus3 \
 |---|---|---|
 | `vmAdminPassword` | (필수) | 12자 이상이며 Windows 암호 복잡성 요구사항을 만족해야 합니다 |
 | `privateVnetAddressPrefix` | `10.20.0.0/16` | public(10.10.0.0/16), private-whitelist(10.30.0.0/16)와 겹치면 안 됩니다 |
+| `deployJumpboxNatGateway` | `true` | `false`로 두면 점프박스가 **인터넷으로 나갈 수 없습니다.** 추가 비용은 NAT Gateway 시간당 약 $0.045 + 처리 데이터 GB당 약 $0.045 입니다 |
 | `deployMachineLearning` | `true` | `false`로 두면 `snet-aml`과 AML 관련 리소스를 만들지 않습니다 |
 | `machineLearningIsolationMode` | `AllowInternetOutbound` | 컴퓨팅이 놓일 관리형 네트워크의 아웃바운드 정책입니다. `AllowOnlyApprovedOutbound`가 가장 엄격합니다 |
 | `privateEndpointNetworkPolicies` | `Enabled` | Private Endpoint로 향하는 트래픽에도 NSG 규칙을 적용합니다 |
