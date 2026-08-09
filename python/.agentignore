@@ -1,0 +1,26 @@
+# What to keep out of the code-deploy ZIP. azd's agent host builds the ZIP from
+# this directory and ignores azure.yaml's dist:, so this file — not a staging
+# directory — is what stops the whole lab from being uploaded.
+#
+# The ZIP should hold exactly: hol-foundry-agents-hosted.py, identity.py,
+# requirements.txt, assets/document.md.
+
+# The other lab scripts. Only the hosted agent runs in the container.
+hol-foundry-agents-prompt.py
+hol-foundry-agents-responses.py
+hol-foundry-models-*.py
+hol-foundry-tools-*.py
+
+# Local tooling and its dependencies, which the container never installs.
+Makefile
+azure.yaml
+
+# Source documents, PDFs and media — megabytes the agent cannot read. Only the
+# markdown that prepackage stages ships.
+assets/*
+!assets/document.md
+
+.agent-package/
+__pycache__/
+.azure/
+.venv/

@@ -1,0 +1,14 @@
+# What the hosted agent needs, and nothing else. This file ships in the
+# code-deploy ZIP and is what Foundry's remote build installs, so anything added
+# here lands in the container. Local-only tools belong in dev-requirements.txt.
+agent-framework-foundry>=1.0.0
+# Pinned to a prerelease because no final release exists yet. Under PEP 440
+# 1.0.0b… sorts below 1.0.0, so >=1.0.0 leaves pip with no candidate at all.
+agent-framework-foundry-hosting>=1.0.0b260730
+azure-identity>=1.19.0
+openai>=2.0.0
+azure-cognitiveservices-speech>=1.43.0
+azure-ai-contentunderstanding>=1.1.0
+azure-ai-projects>=2.3.0
+# hol-seed-ai-search.py 가 인덱스를 만들고 문서를 올릴 때 쓴다. 점프박스에서 실행한다.
+azure-search-documents>=11.6.0

@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+#
+# azd project for the hosted agent. The Foundry project and the model deployment
+# come from iac/, not from here — this file only describes the agent, so azd and
+# the Bicep templates never fight over the same resources.
+#
+# Driven by the Makefile: make stage deploy invoke FILE=assets/<doc>.md
+
+requiredVersions:
+  extensions:
+    azure.ai.agents: '>=1.0.0-beta.4'
+
+name: hol-markdown-rag
+
+services:
+  markdown-rag:
+    host: azure.ai.agent
+    kind: hosted
+    name: hol-markdown-rag
+    description: Answers questions about one markdown document by grepping it.
+    language: python
+
+    # The agent host zips this directory and does not honour dist:, so what
+    # ships is controlled by .agentignore. prepackage only has to put the chosen
+    # document at the one path the container expects.
+    project: .
+
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: hol-foundry-agents-hosted.py
+
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+
+    container:
+      resources:
+        cpu: '0.5'
+        memory: 1Gi
+
+    environmentVariables:
+      - name: AZURE_AI_PROJECT_ENDPOINT
+        value: ${AZURE_AI_PROJECT_ENDPOINT}
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      # The staged copy always lands here, whatever FILE was on the way in.
+      - name: AGENT_DOCUMENT
+        value: assets/document.md
+
+    hooks:
+      prepackage:
+        shell: sh
+        continueOnError: false
+        run: |
+          set -e
+          test -n "$AGENT_SOURCE_DOCUMENT" || { echo "AGENT_SOURCE_DOCUMENT is not set — use the Makefile, or azd env set AGENT_SOURCE_DOCUMENT <file>"; exit 1; }
+          test -f "$AGENT_SOURCE_DOCUMENT" || { echo "$AGENT_SOURCE_DOCUMENT not found"; exit 1; }
+          # Whatever FILE was chosen ships under one fixed name, so AGENT_DOCUMENT
+          # below never has to change. Copying onto itself would truncate it.
+          [ "$AGENT_SOURCE_DOCUMENT" = "assets/document.md" ] || cp "$AGENT_SOURCE_DOCUMENT" assets/document.md
+          echo "staged $AGENT_SOURCE_DOCUMENT as assets/document.md"
+
+infra:
+  provider: microsoft.foundry
