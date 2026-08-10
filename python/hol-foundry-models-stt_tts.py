@@ -13,15 +13,15 @@ def parse_args():
 
     identity.add_auth_arguments(parser)
 
-    parser.add_argument("--text", help="TTS: synthesize this text into --out")
-    parser.add_argument("--transcribe", metavar="WAV", help="STT: transcribe this audio file")
-    parser.add_argument("--out", default="speech.wav", help="TTS output file")
-    parser.add_argument("--voice", default="en-US-AvaMultilingualNeural", help="TTS voice, e.g. ko-KR-SunHiNeural")
-    parser.add_argument("--language", default="ko-KR", help="STT recognition language, e.g. ko-KR")
+    parser.add_argument("--tts-input", help="TTS: synthesize this text into --tts-output")
+    parser.add_argument("--stt-input", metavar="WAV", help="STT: transcribe this audio file")
+    parser.add_argument("--tts-output", default="speech.wav", help="TTS output file")
+    parser.add_argument("--tts-voice", default="en-US-AvaMultilingualNeural", help="TTS voice, e.g. ko-KR-SunHiNeural")
+    parser.add_argument("--stt-lang", default="ko-KR", help="STT recognition language, e.g. ko-KR")
 
     args = parser.parse_args()
-    if bool(args.text) == bool(args.transcribe):
-        parser.error("pass exactly one of --text or --transcribe")
+    if bool(args.tts_input) == bool(args.stt_input):
+        parser.error("pass exactly one of --tts-input or --stt-input")
     return args
 
 
@@ -36,22 +36,22 @@ def create_config(args):
 
 
 def synthesize(config, args):
-    config.speech_synthesis_voice_name = args.voice
+    config.speech_synthesis_voice_name = args.tts_voice
     synthesizer = speechsdk.SpeechSynthesizer(
         speech_config=config,
-        audio_config=speechsdk.audio.AudioOutputConfig(filename=args.out),
+        audio_config=speechsdk.audio.AudioOutputConfig(filename=args.tts_output),
     )
-    result = synthesizer.speak_text_async(args.text).get()
+    result = synthesizer.speak_text_async(args.tts_input).get()
     if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
         raise SystemExit(result.cancellation_details)
-    print(args.out)
+    print(args.tts_output)
 
 
 def transcribe(config, args):
-    config.speech_recognition_language = args.language
+    config.speech_recognition_language = args.stt_lang
     recognizer = speechsdk.SpeechRecognizer(
         speech_config=config,
-        audio_config=speechsdk.audio.AudioConfig(filename=args.transcribe),
+        audio_config=speechsdk.audio.AudioConfig(filename=args.stt_input),
     )
     # One utterance only. Longer audio needs start_continuous_recognition_async.
     result = recognizer.recognize_once_async().get()
@@ -63,7 +63,7 @@ def transcribe(config, args):
 def main():
     args = parse_args()
     config = create_config(args)
-    if args.text:
+    if args.tts_input:
         synthesize(config, args)
     else:
         transcribe(config, args)
