@@ -10,6 +10,10 @@ hol-foundry-agents-prompt.py
 hol-foundry-agents-responses.py
 hol-foundry-models-*.py
 hol-foundry-tools-*.py
+hol-foundry-observability-*.py
+# The observability scripts' shared module. identity.py stays because the hosted
+# agent imports it; nothing in the container imports this one.
+observability.py
 # The AI Search seeding script. It runs on the jumpbox before the lab starts;
 # the container never indexes anything.
 aisrch-*.py
