@@ -1,7 +1,5 @@
 {
   "index": "housing",
-  "source": "KB주택시장리뷰_2025년 10월호.md",
-  "format": "markdown",
   "analyzer": "ko.microsoft",
   "chunk": { "from": "body", "size": 1200, "overlap": 150 },
   "vector": { "name": "content_vector", "from": "content", "dimensions": 3072 },

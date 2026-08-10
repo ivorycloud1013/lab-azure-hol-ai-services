@@ -1,7 +1,5 @@
 {
   "index": "merchants",
-  "source": "KR_Merchants_Sample.csv",
-  "format": "csv",
   "analyzer": "ko.microsoft",
   "vector": { "name": "content_vector", "from": "content", "dimensions": 3072 },
   "semantic": {

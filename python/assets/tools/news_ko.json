@@ -1,7 +1,5 @@
 {
   "index": "news",
-  "source": "news_ko.csv",
-  "format": "csv",
   "analyzer": "ko.microsoft",
   "require": ["content"],
   "chunk": { "from": "content", "size": 1200, "overlap": 150 },
