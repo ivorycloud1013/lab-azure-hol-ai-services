@@ -3,45 +3,54 @@
 import argparse
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import MCPTool, MCPToolFilter, PromptAgentDefinition
+from azure.ai.projects.models import (
+    AISearchIndexResource,
+    AzureAISearchTool,
+    AzureAISearchToolResource,
+    BingGroundingSearchConfiguration,
+    BingGroundingSearchToolParameters,
+    BingGroundingTool,
+    ConnectionType,
+    PromptAgentDefinition,
+)
 from azure.core.exceptions import ResourceNotFoundError
 
 import identity
 
 INSTRUCTIONS = (
-    "You answer questions about live Azure telemetry and application data by calling the "
-    "MCP tools attached to you. List the tools you have before assuming something is out of "
-    "reach, and name the tool and the resource each fact came from. "
+    "You answer questions from the knowledge sources attached to you and from nothing else. "
+    "Search before answering, and name the document, merchant or article each fact came from. "
+    "When the sources disagree, say so instead of picking one. "
     "Say you could not find it rather than guessing. Answer in the language of the question."
 )
 
-DEFAULT_AGENT_NAME = "hol-mcp-ops"
+DEFAULT_AGENT_NAME = "hol-knowledge-rag"
 
-# Azure Managed Grafana serves a managed MCP endpoint on every workspace — nothing
-# to deploy. The audience is fixed by the service, not by the workspace.
-GRAFANA_MCP_PATH = "/api/azure-mcp"
-GRAFANA_AUDIENCE = "https://dashboard.azure.com"
+# The indexes aisrch-init-upload-documents.py builds. Passing one of these is the
+# common case, but any index on the connected service works.
+LAB_INDEXES = ("housing", "merchants", "news")
 
-# The Cosmos DB MCP Toolkit is not managed — it is a container app you deploy from
-# github.com/AzureCosmosDB/MCPToolKit, and its audience is the Entra app that
-# deployment registers. deployment-info.json holds both values.
-COSMOS_MCP_PATH = "/mcp"
+# Every query type but simple and semantic asks Search to embed the question, which
+# only works when the index carries a vectorizer on its vector profile. The lab
+# indexes embed at upload time and have none, so the vector types return an error
+# there — the vectors are still searchable, just not from this tool.
+QUERY_TYPES = ("simple", "semantic", "vector", "vector_simple_hybrid", "vector_semantic_hybrid")
+DEFAULT_QUERY_TYPE = "semantic"
 
-# Every tool call would otherwise stop and wait for a human. A lab answering its own
-# questions on the terminal has nobody to ask, and both servers here are read-only.
-APPROVAL_NEVER = "never"
+DEFAULT_TOP_K = 5
 
-MCP_OUTPUT_TYPES = ("mcp_list_tools", "mcp_call", "mcp_approval_request")
+# Output items that are neither the answer nor the model thinking about it — one
+# per search the agent ran.
+QUIET_OUTPUT_TYPES = ("message", "reasoning")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Attach remote MCP servers to a Foundry prompt agent and ask it questions.",
-        epilog="--grafana and --cosmos are presets over --mcp. Those three hand the agent your "
-               "own Entra token, so you need the role on the target yourself and the version "
-               "stops working when the token expires. --connection points at a connection the "
-               "project already holds, which authenticates as the project identity and keeps "
-               "working — mix the two freely. --endpoint is the project endpoint, "
+        description="Ground a Foundry prompt agent on an Azure AI Search index and ask it questions.",
+        epilog="Run aisrch-init-upload-documents.py first — it builds the "
+               f"{', '.join(LAB_INDEXES)} indexes this reads. The agent searches as the project "
+               "identity through a project connection, so the project needs Search Index Data "
+               "Reader on the service, not you. --endpoint is the project endpoint, "
                "https://<resource>.ai.azure.com/api/projects/<project>.",
     )
     parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
@@ -49,167 +58,113 @@ def parse_args():
 
     identity.add_auth_arguments(parser)
 
-    servers = parser.add_argument_group("MCP servers, repeat any of them")
-    servers.add_argument("--grafana", action="append", default=[], metavar="HOSTNAME",
-                         help="Azure Managed Grafana workspace hostname, "
-                              "e.g. my-grafana-abc.eastus.grafana.azure.com — hostname only")
-    servers.add_argument("--cosmos", action="append", default=[], metavar="URL=AUDIENCE",
-                         help="Cosmos DB MCP Toolkit container app URL and the audience of the "
-                              "Entra app it was deployed with, both from deployment-info.json")
-    servers.add_argument("--mcp", action="append", default=[], metavar="LABEL=URL[=AUDIENCE]",
-                         help="any other remote MCP server, unauthenticated without an audience")
-    servers.add_argument("--connection", action="append", default=[], metavar="LABEL=CONNECTION_ID",
-                         help="MCP server the project already has a connection for — "
-                              "the connection carries the authentication, so no audience")
+    knowledge = parser.add_argument_group("knowledge sources")
+    knowledge.add_argument("--index", metavar="NAME",
+                           help=f"Azure AI Search index to ground on, e.g. {' / '.join(LAB_INDEXES)}")
+    knowledge.add_argument("--search-connection", metavar="NAME",
+                           help="project connection to the Search service "
+                                "(default: the project's default Azure AI Search connection)")
+    knowledge.add_argument("--bing-connection", metavar="NAME",
+                           help="project connection to Grounding with Bing Search, to answer from "
+                                "the public web as well — no default, connections vary by project")
 
-    parser.add_argument("--allowed-tool", action="append", default=[], metavar="NAME",
-                        help="restrict every server to these tool names, repeat for more")
-    parser.add_argument("--read-only", action="store_true",
-                        help="restrict every server to tools it annotates as read-only")
+    search = parser.add_argument_group("how the index is queried")
+    search.add_argument("--query-type", choices=QUERY_TYPES, default=DEFAULT_QUERY_TYPE,
+                        help=f"(default {DEFAULT_QUERY_TYPE}; the vector types need a vectorizer "
+                             "on the index, which the lab indexes do not have)")
+    search.add_argument("--top-k", type=int, default=DEFAULT_TOP_K,
+                        help=f"documents to put in front of the model (default {DEFAULT_TOP_K})")
+    search.add_argument("--filter", metavar="ODATA",
+                        help="OData filter applied to every search, e.g. \"category eq '기술'\"")
+
     parser.add_argument("--agent-name", default=DEFAULT_AGENT_NAME,
                         help=f"agent to create a version of (default {DEFAULT_AGENT_NAME})")
     parser.add_argument("--question", action="append", default=[], required=True, metavar="TEXT",
                         help="what to ask, repeat to follow up in the same conversation")
-    parser.add_argument("--show-tools", action="store_true",
-                        help="print the tools the agent discovered and every call it makes")
+    parser.add_argument("--show-sources", action="store_true",
+                        help="print every search the agent ran and what it cited")
     parser.add_argument("--delete", action="store_true", help="delete the agent when done")
 
     args = parser.parse_args()
     if args.auth in ("api-key", "access-token"):
         parser.error(f"--auth {args.auth} is not supported by the projects SDK, use another method")
-    if args.allowed_tool and args.read_only:
-        parser.error("--allowed-tool names tools and --read-only filters them, pass only one")
-    if not (args.grafana or args.cosmos or args.mcp or args.connection):
-        parser.error("attach at least one server with --grafana, --cosmos, --mcp or --connection")
+    if not (args.index or args.bing_connection):
+        parser.error("attach at least one source with --index or --bing-connection")
+    if args.search_connection and not args.index:
+        parser.error("--search-connection needs an --index to read")
+    if args.top_k < 1:
+        parser.error("--top-k must be at least 1")
     return args
 
 
-def split_option(value, option, shape):
-    """Split an A=B style option, so a missing half fails here and not at the service."""
-    parts = shape.split("=")
-    fields = value.split("=", len(parts) - 1)
-    if len(fields) != len(parts) or not all(fields):
-        raise SystemExit(f"{option} {value} must be {shape}")
-    return fields
+def get_connection_id(project, name):
+    """Resolve a connection by the name shown in the portal."""
+    try:
+        return project.connections.get(name).id
+    except ResourceNotFoundError:
+        raise SystemExit(f"the project has no connection named {name}") from None
 
 
-def label_for(name, index):
-    """Server labels have to be unique, and the common case is one server per kind."""
-    return f"{name}-{index}" if index else name
+def get_default_search_connection_id(project):
+    try:
+        return project.connections.get_default(ConnectionType.AZURE_AI_SEARCH).id
+    except ValueError:
+        raise SystemExit("the project has no default Azure AI Search connection, "
+                         "pass --search-connection with its name") from None
 
 
-def ends_with_path(url, path):
-    return url.rstrip("/") + ("" if url.rstrip("/").endswith(path) else path)
+def build_search_tool(project, args):
+    """Declare the index as knowledge on the agent.
 
-
-def grafana_specs(hostnames):
-    return [
-        {"label": label_for("grafana", index),
-         "url": f"https://{hostname.strip('/')}{GRAFANA_MCP_PATH}",
-         "audience": GRAFANA_AUDIENCE,
-         "description": "Azure Managed Grafana — Azure resources, metrics, logs and dashboards"}
-        for index, hostname in enumerate(hostnames)
-    ]
-
-
-def cosmos_specs(values):
-    specs = []
-    for index, value in enumerate(values):
-        url, audience = split_option(value, "--cosmos", "URL=AUDIENCE")
-        specs.append({
-            "label": label_for("cosmos", index),
-            "url": ends_with_path(url, COSMOS_MCP_PATH),
-            "audience": audience,
-            "description": "Azure Cosmos DB — databases, documents, schema and vector search",
-        })
-    return specs
-
-
-def mcp_specs(values):
-    """LABEL=URL, or LABEL=URL=AUDIENCE when the server wants an Entra token."""
-    specs = []
-    for value in values:
-        fields = value.split("=", 2)
-        if len(fields) < 2 or not all(fields):
-            raise SystemExit(f"--mcp {value} must be LABEL=URL or LABEL=URL=AUDIENCE")
-        specs.append({"label": fields[0], "url": fields[1], "description": None,
-                      "audience": fields[2] if len(fields) > 2 else None})
-    return specs
-
-
-def connection_specs(values):
-    return [
-        dict(zip(("label", "connection_id"), split_option(value, "--connection", "LABEL=CONNECTION_ID")))
-        for value in values
-    ]
-
-
-def build_specs(args):
-    """One flat list of servers, whichever option each of them arrived on."""
-    return (grafana_specs(args.grafana) + cosmos_specs(args.cosmos)
-            + mcp_specs(args.mcp) + connection_specs(args.connection))
-
-
-def get_tool_filter(args):
-    if args.allowed_tool:
-        return args.allowed_tool
-    if args.read_only:
-        # Only servers that annotate their tools with readOnlyHint match this.
-        return MCPToolFilter(read_only=True)
-    return None
-
-
-def get_token(credential, audience, cache):
-    """One token per audience — several Grafana workspaces share the audience."""
-    if audience not in cache:
-        cache[audience] = credential.get_token(f"{audience.rstrip('/')}/.default").token
-    return cache[audience]
-
-
-def build_tool(spec, allowed_tools, credential, tokens):
-    """Declare one server as a tool on the agent.
-
-    The service calls the server itself, so what it needs is a URL it can reach and
-    a credential to present. Nothing is proxied through this process.
+    The service queries Search itself over the connection, so nothing is retrieved
+    in this process and the index never has to be reachable from here.
     """
-    common = {"server_label": spec["label"], "require_approval": APPROVAL_NEVER,
-              "allowed_tools": allowed_tools}
-
-    if spec.get("connection_id"):
-        # The connection holds the credential, so the agent authenticates as the
-        # project identity and this version keeps working after today.
-        return MCPTool(**common, project_connection_id=spec["connection_id"])
-
-    optional = {}
-    if spec.get("description"):
-        optional["server_description"] = spec["description"]
-    if spec.get("audience"):
-        optional["authorization"] = get_token(credential, spec["audience"], tokens)
-    return MCPTool(**common, server_url=spec["url"], **optional)
+    connection_id = (get_connection_id(project, args.search_connection) if args.search_connection
+                     else get_default_search_connection_id(project))
+    index = AISearchIndexResource(
+        project_connection_id=connection_id,
+        index_name=args.index,
+        query_type=args.query_type,
+        top_k=args.top_k,
+        filter=args.filter,
+    )
+    print(f"grounding on index {args.index} ({args.query_type}, top {args.top_k})")
+    # One index resource per agent is the service limit, so this list never grows.
+    return AzureAISearchTool(azure_ai_search=AzureAISearchToolResource(indexes=[index]))
 
 
-def build_tools(specs, allowed_tools, credential):
-    tokens, tools = {}, []
-    for spec in specs:
-        tools.append(build_tool(spec, allowed_tools, credential, tokens))
-        print(f"attached {spec['label']} — {spec.get('url') or spec['connection_id']}")
+def build_bing_tool(project, args):
+    connection_id = get_connection_id(project, args.bing_connection)
+    print(f"grounding on the public web through {args.bing_connection}")
+    return BingGroundingTool(
+        bing_grounding=BingGroundingSearchToolParameters(
+            search_configurations=[BingGroundingSearchConfiguration(project_connection_id=connection_id)],
+        )
+    )
+
+
+def build_tools(project, args):
+    tools = []
+    if args.index:
+        tools.append(build_search_tool(project, args))
+    if args.bing_connection:
+        tools.append(build_bing_tool(project, args))
     return tools
 
 
-def create_version(project, args, specs, credential):
-    """A prompt agent is declarative — model, instructions and servers live in the
-    service, and it calls the servers itself. Nothing runs in this process.
+def create_version(project, args):
+    """A prompt agent is declarative — model, instructions and knowledge live in
+    the service, which retrieves and answers on its own.
 
-    A new version every run, because --auth-mode token writes a bearer token into
-    the definition and that token expires within the hour. Versions are cheap, and
-    the alternative is an agent that starts failing on its second day.
+    A new version every run, because the index, query type and filter are part of
+    the definition and this script exists to let you change them and compare.
     """
     agent = project.agents.create_version(
         agent_name=args.agent_name,
         definition=PromptAgentDefinition(
             model=args.deployment,
             instructions=INSTRUCTIONS,
-            tools=build_tools(specs, get_tool_filter(args), credential),
+            tools=build_tools(project, args),
         ),
     )
     print(f"agent {agent.name} version {agent.version} created")
@@ -225,43 +180,66 @@ def agent_exists(project, agent_name):
         return False
 
 
-def print_tool_activity(response):
-    """MCP work shows up in the output as its own items, next to the answer."""
+def describe_annotation(annotation):
+    """One citation as a line of text.
+
+    File search names a file, Search and Bing hand back a title and a URL, and
+    which of those is present depends on the source — so take what is there.
+    """
+    title = (getattr(annotation, "filename", None) or getattr(annotation, "title", None)
+             or getattr(annotation, "text", None))
+    url = getattr(annotation, "url", None)
+    if title and url and url not in title:
+        return f"{title} — {url}"
+    return title or url
+
+
+def get_citations(response):
+    """Collect what the answer was grounded on, in first-seen order."""
+    citations = []
     for item in response.output:
-        if item.type not in MCP_OUTPUT_TYPES:
-            continue
-        if item.type == "mcp_list_tools":
-            names = [tool.name for tool in getattr(item, "tools", None) or []]
-            print(f"  [{getattr(item, 'server_label', '?')} offers {', '.join(names) or 'nothing'}]")
-            continue
-        error = getattr(item, "error", None)
-        print(f"  [{getattr(item, 'server_label', '?')}.{getattr(item, 'name', item.type)}"
-              f"{' failed: ' + str(error) if error else ''}]")
+        for content in getattr(item, "content", None) or []:
+            for annotation in getattr(content, "annotations", None) or []:
+                citation = describe_annotation(annotation)
+                if citation and citation not in citations:
+                    citations.append(citation)
+    return citations
 
 
-def ask(client, conversation_id, question, show_tools):
+def print_search_activity(response):
+    """Retrieval shows up in the output as its own items, next to the answer."""
+    for item in response.output:
+        if item.type in QUIET_OUTPUT_TYPES:
+            continue
+        queries = getattr(item, "queries", None) or []
+        status = getattr(item, "status", None)
+        detail = ", ".join(str(query) for query in queries) or status or ""
+        print(f"  [{item.type}{': ' + detail if detail else ''}]")
+
+
+def ask(client, conversation_id, question, show_sources):
     print(f"\n> {question}")
     response = client.responses.create(conversation=conversation_id, input=question)
-    if show_tools:
-        print_tool_activity(response)
+    if show_sources:
+        print_search_activity(response)
     print(response.output_text)
+    citations = get_citations(response)
+    if citations:
+        print("  sources: " + "; ".join(citations))
 
 
 def main():
     args = parse_args()
-    # Before the first network call, so a malformed --cosmos or --mcp fails on the spot.
-    specs = build_specs(args)
-    credential = identity.get_credential(args)
-    project = AIProjectClient(endpoint=args.endpoint, credential=credential)
+    project = AIProjectClient(endpoint=args.endpoint, credential=identity.get_credential(args))
 
     existed = agent_exists(project, args.agent_name)
     try:
-        agent = create_version(project, args, specs, credential)
-        # Same client bound to the agent, so responses run through its tools.
+        agent = create_version(project, args)
+        # Same client bound to the agent, so responses run through its knowledge.
         agent_client = project.get_openai_client(agent_name=agent.name)
         conversation = agent_client.conversations.create()
         for question in args.question:
-            ask(agent_client, conversation.id, question, args.show_tools)
+            ask(agent_client, conversation.id, question, args.show_sources)
     except BaseException as error:
         # Roll back only an agent this run brought into existence, never one it
         # merely added a version to.

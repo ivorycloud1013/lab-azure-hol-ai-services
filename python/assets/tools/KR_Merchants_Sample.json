@@ -1,0 +1,96 @@
+{
+  "index": "merchants",
+  "analyzer": "ko.microsoft",
+  "vector": { "name": "content_vector", "from": "content", "dimensions": 3072 },
+  "semantic": {
+    "title": "title",
+    "content": ["content", "summary"],
+    "keywords": ["category"]
+  },
+  "fields": [
+    {
+      "name": "id",
+      "key": true,
+      "filterable": true,
+      "key_from": [
+        { "const": "merchant" },
+        { "first": ["MerchantId", "MerchantName"] }
+      ]
+    },
+    { "name": "title", "searchable": true, "from": "MerchantName" },
+    {
+      "name": "summary",
+      "searchable": true,
+      "from": { "first": ["Description", "MerchantName"] }
+    },
+    {
+      "name": "content",
+      "searchable": true,
+      "separator": " / ",
+      "from": [
+        "MerchantName",
+        "Category",
+        "Description",
+        { "column": "Tag", "label": "태그" },
+        { "columns": ["StreetAddress", "City"], "label": "주소" },
+        { "column": "Rating", "label": "평점" }
+      ]
+    },
+    {
+      "name": "category",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "from": "Category"
+    },
+    { "name": "source", "filterable": true, "facetable": true, "from": "_source" },
+    { "name": "parent_id", "filterable": true, "from": "MerchantId" },
+    {
+      "name": "chunk_index",
+      "type": "int",
+      "filterable": true,
+      "sortable": true,
+      "from": "_chunk_index"
+    },
+    {
+      "name": "rating",
+      "type": "double",
+      "filterable": true,
+      "sortable": true,
+      "facetable": true,
+      "from": "Rating"
+    },
+    {
+      "name": "tags",
+      "type": "collection",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "split": { "column": "Tag", "separator": "," }
+    },
+    { "name": "street_address", "searchable": true, "from": "StreetAddress" },
+    {
+      "name": "city",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "from": "City"
+    },
+    {
+      "name": "state_province",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "from": "StateProvince"
+    },
+    { "name": "postal_code", "filterable": true, "from": "PostalCode" },
+    { "name": "country", "filterable": true, "facetable": true, "from": "Country" },
+    {
+      "name": "location",
+      "type": "geo",
+      "filterable": true,
+      "sortable": true,
+      "point": { "longitude": "Longitude", "latitude": "Latitude" }
+    }
+  ]
+}

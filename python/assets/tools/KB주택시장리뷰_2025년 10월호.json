@@ -1,0 +1,47 @@
+{
+  "index": "housing",
+  "analyzer": "ko.microsoft",
+  "chunk": { "from": "body", "size": 1200, "overlap": 150 },
+  "vector": { "name": "content_vector", "from": "content", "dimensions": 3072 },
+  "semantic": {
+    "title": "title",
+    "content": ["content", "summary"],
+    "keywords": ["category"]
+  },
+  "fields": [
+    {
+      "name": "id",
+      "key": true,
+      "filterable": true,
+      "key_from": [{ "const": "housing" }, "_index", "_chunk_index"]
+    },
+    { "name": "title", "searchable": true, "from": "heading" },
+    {
+      "name": "summary",
+      "searchable": true,
+      "separator": " — ",
+      "from": ["heading_path", { "column": "_chunk", "shorten": 300 }]
+    },
+    { "name": "content", "searchable": true, "from": "_chunk" },
+    {
+      "name": "category",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "from": { "const": "주택시장" }
+    },
+    { "name": "source", "filterable": true, "facetable": true, "from": "_source" },
+    {
+      "name": "parent_id",
+      "filterable": true,
+      "key_from": [{ "const": "housing" }, "_index"]
+    },
+    {
+      "name": "chunk_index",
+      "type": "int",
+      "filterable": true,
+      "sortable": true,
+      "from": "_chunk_index"
+    }
+  ]
+}

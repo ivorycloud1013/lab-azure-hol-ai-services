@@ -1,0 +1,48 @@
+{
+  "index": "news",
+  "analyzer": "ko.microsoft",
+  "require": ["content"],
+  "chunk": { "from": "content", "size": 1200, "overlap": 150 },
+  "vector": { "name": "content_vector", "from": "content", "dimensions": 3072 },
+  "semantic": {
+    "title": "title",
+    "content": ["content", "summary"],
+    "keywords": ["category"]
+  },
+  "fields": [
+    {
+      "name": "id",
+      "key": true,
+      "filterable": true,
+      "key_from": [{ "const": "news" }, "id", "_chunk_index"]
+    },
+    {
+      "name": "title",
+      "searchable": true,
+      "shorten": 60,
+      "from": { "first": ["summary", "content"] }
+    },
+    {
+      "name": "summary",
+      "searchable": true,
+      "from": { "first": ["summary", { "column": "_chunk", "shorten": 300 }] }
+    },
+    { "name": "content", "searchable": true, "from": "_chunk" },
+    {
+      "name": "category",
+      "searchable": true,
+      "filterable": true,
+      "facetable": true,
+      "from": "category"
+    },
+    { "name": "source", "filterable": true, "facetable": true, "from": "_source" },
+    { "name": "parent_id", "filterable": true, "from": "id" },
+    {
+      "name": "chunk_index",
+      "type": "int",
+      "filterable": true,
+      "sortable": true,
+      "from": "_chunk_index"
+    }
+  ]
+}
