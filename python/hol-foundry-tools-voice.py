@@ -1,284 +1,361 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
+import base64
+import os
+import threading
+import wave
 
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import MCPTool, MCPToolFilter, PromptAgentDefinition
-from azure.core.exceptions import ResourceNotFoundError
+from azure.ai.voicelive.aio import connect
+from azure.ai.voicelive.models import (
+    AudioInputTranscriptionOptions,
+    AzureSemanticVad,
+    AzureStandardVoice,
+    InputAudioFormat,
+    Modality,
+    RequestSession,
+    ServerEventType,
+)
+from azure.core.credentials import AzureKeyCredential
 
 import identity
 
 INSTRUCTIONS = (
-    "You answer questions about live Azure telemetry and application data by calling the "
-    "MCP tools attached to you. List the tools you have before assuming something is out of "
-    "reach, and name the tool and the resource each fact came from. "
-    "Say you could not find it rather than guessing. Answer in the language of the question."
+    "You are a spoken assistant in a hands-on lab. Keep answers to a few sentences, because "
+    "they are read out loud. Say you do not know rather than guessing. "
+    "Answer in the language you were spoken to."
 )
 
-DEFAULT_AGENT_NAME = "hol-mcp-ops"
+DEFAULT_MODEL = "gpt-realtime"
+DEFAULT_VOICE = "en-US-AvaMultilingualNeural"
+DEFAULT_AUDIO_OUT = "voice-out.wav"
 
-# Azure Managed Grafana serves a managed MCP endpoint on every workspace — nothing
-# to deploy. The audience is fixed by the service, not by the workspace.
-GRAFANA_MCP_PATH = "/api/azure-mcp"
-GRAFANA_AUDIENCE = "https://dashboard.azure.com"
+# Sampling rates the service accepts for pcm16. Anything else has to be resampled
+# before it gets here.
+INPUT_SAMPLE_RATES = (8000, 16000, 24000)
 
-# The Cosmos DB MCP Toolkit is not managed — it is a container app you deploy from
-# github.com/AzureCosmosDB/MCPToolKit, and its audience is the Entra app that
-# deployment registers. deployment-info.json holds both values.
-COSMOS_MCP_PATH = "/mcp"
+# What pcm16 output comes back as. The other output formats exist, but this script
+# only asks for the default one.
+OUTPUT_SAMPLE_RATE = 24000
+SAMPLE_WIDTH_BYTES = 2
+CHANNELS = 1
 
-# Every tool call would otherwise stop and wait for a human. A lab answering its own
-# questions on the terminal has nobody to ask, and both servers here are read-only.
-APPROVAL_NEVER = "never"
+# The microphone runs at the same rate the answer comes back at, so one constant
+# describes both ends of the conversation.
+MIC_SAMPLE_RATE = 24000
 
-MCP_OUTPUT_TYPES = ("mcp_list_tools", "mcp_call", "mcp_approval_request")
+# 200 ms of 24 kHz pcm16. Small enough that the service hears speech start promptly,
+# large enough that a long file does not turn into thousands of websocket frames.
+CHUNK_BYTES = MIC_SAMPLE_RATE * SAMPLE_WIDTH_BYTES // 5
+
+# The sound card asks for this many frames at a time. Shorter blocks mean lower
+# latency and more callbacks.
+MIC_BLOCK_FRAMES = 2400
+
+TRANSCRIPTION_MODEL = "azure-speech"
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Attach remote MCP servers to a Foundry prompt agent and ask it questions.",
-        epilog="--grafana and --cosmos are presets over --mcp. Those three hand the agent your "
-               "own Entra token, so you need the role on the target yourself and the version "
-               "stops working when the token expires. --connection points at a connection the "
-               "project already holds, which authenticates as the project identity and keeps "
-               "working — mix the two freely. --endpoint is the project endpoint, "
-               "https://<resource>.ai.azure.com/api/projects/<project>.",
+        description="Hold a spoken conversation with a Foundry model or agent over the Voice Live API.",
+        epilog="One websocket carries speech in and speech out — no separate STT and TTS calls, "
+               "which is what hol-foundry-models-stt_tts.py does instead. --endpoint is the "
+               "account endpoint, https://<resource>.cognitiveservices.azure.com, not the project "
+               "one. --mic needs the sounddevice package and a sound card, so a jumpbox reached "
+               "over Bastion wants --audio-in instead.",
     )
-    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
-    parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
+    parser.add_argument("--endpoint", required=True, help="Foundry account endpoint")
 
     identity.add_auth_arguments(parser)
 
-    servers = parser.add_argument_group("MCP servers, repeat any of them")
-    servers.add_argument("--grafana", action="append", default=[], metavar="HOSTNAME",
-                         help="Azure Managed Grafana workspace hostname, "
-                              "e.g. my-grafana-abc.eastus.grafana.azure.com — hostname only")
-    servers.add_argument("--cosmos", action="append", default=[], metavar="URL=AUDIENCE",
-                         help="Cosmos DB MCP Toolkit container app URL and the audience of the "
-                              "Entra app it was deployed with, both from deployment-info.json")
-    servers.add_argument("--mcp", action="append", default=[], metavar="LABEL=URL[=AUDIENCE]",
-                         help="any other remote MCP server, unauthenticated without an audience")
-    servers.add_argument("--connection", action="append", default=[], metavar="LABEL=CONNECTION_ID",
-                         help="MCP server the project already has a connection for — "
-                              "the connection carries the authentication, so no audience")
+    target = parser.add_argument_group("who answers")
+    target.add_argument("--model", help=f"realtime model to talk to (default {DEFAULT_MODEL})")
+    target.add_argument("--agent-name", help="talk to this Foundry agent instead of a bare model, "
+                                             "which brings its own instructions and tools")
+    target.add_argument("--project-name", help="project holding --agent-name")
+    target.add_argument("--agent-version", help="pin a version of --agent-name (default: the latest)")
 
-    parser.add_argument("--allowed-tool", action="append", default=[], metavar="NAME",
-                        help="restrict every server to these tool names, repeat for more")
-    parser.add_argument("--read-only", action="store_true",
-                        help="restrict every server to tools it annotates as read-only")
-    parser.add_argument("--agent-name", default=DEFAULT_AGENT_NAME,
-                        help=f"agent to create a version of (default {DEFAULT_AGENT_NAME})")
-    parser.add_argument("--question", action="append", default=[], required=True, metavar="TEXT",
-                        help="what to ask, repeat to follow up in the same conversation")
-    parser.add_argument("--show-tools", action="store_true",
-                        help="print the tools the agent discovered and every call it makes")
-    parser.add_argument("--delete", action="store_true", help="delete the agent when done")
+    source = parser.add_argument_group("where the speech comes from")
+    source.add_argument("--audio-in", metavar="WAV",
+                        help="speak this file, 16-bit mono PCM at 8/16/24 kHz")
+    source.add_argument("--mic", action="store_true", help="speak into the microphone until Ctrl+C")
+    source.add_argument("--seconds", type=float, metavar="N",
+                        help="stop --mic after N seconds instead of waiting for Ctrl+C")
+
+    parser.add_argument("--audio-out", default=DEFAULT_AUDIO_OUT,
+                        help=f"where the spoken answer is written (default {DEFAULT_AUDIO_OUT})")
+    parser.add_argument("--voice", default=DEFAULT_VOICE, help=f"Azure voice (default {DEFAULT_VOICE})")
+    parser.add_argument("--language", help="language of the speech, e.g. ko-KR (default: detected)")
+    parser.add_argument("--instructions", help="override what the assistant is told to be")
 
     args = parser.parse_args()
-    if args.auth in ("api-key", "access-token"):
-        parser.error(f"--auth {args.auth} is not supported by the projects SDK, use another method")
-    if args.allowed_tool and args.read_only:
-        parser.error("--allowed-tool names tools and --read-only filters them, pass only one")
-    if not (args.grafana or args.cosmos or args.mcp or args.connection):
-        parser.error("attach at least one server with --grafana, --cosmos, --mcp or --connection")
+    if args.auth == "access-token":
+        parser.error("--auth access-token is not supported by the Voice Live SDK, use another method")
+    if args.auth == "api-key" and not args.api_key:
+        parser.error("--auth api-key needs --api-key or AZURE_OPENAI_API_KEY")
+    if bool(args.audio_in) == bool(args.mic):
+        parser.error("pass exactly one of --audio-in or --mic")
+    if args.audio_in and not os.path.isfile(args.audio_in):
+        parser.error(f"{args.audio_in} not found")
+    if args.seconds and not args.mic:
+        parser.error("--seconds only applies to --mic")
+    if bool(args.agent_name) != bool(args.project_name):
+        parser.error("--agent-name and --project-name go together")
+    if args.agent_name and args.model:
+        parser.error("--agent-name already carries a model, so --model does not apply")
     return args
 
 
-def split_option(value, option, shape):
-    """Split an A=B style option, so a missing half fails here and not at the service."""
-    parts = shape.split("=")
-    fields = value.split("=", len(parts) - 1)
-    if len(fields) != len(parts) or not all(fields):
-        raise SystemExit(f"{option} {value} must be {shape}")
-    return fields
+def read_wave(path):
+    """Read a WAV file as raw pcm16, refusing anything the service cannot take.
 
-
-def label_for(name, index):
-    """Server labels have to be unique, and the common case is one server per kind."""
-    return f"{name}-{index}" if index else name
-
-
-def ends_with_path(url, path):
-    return url.rstrip("/") + ("" if url.rstrip("/").endswith(path) else path)
-
-
-def grafana_specs(hostnames):
-    return [
-        {"label": label_for("grafana", index),
-         "url": f"https://{hostname.strip('/')}{GRAFANA_MCP_PATH}",
-         "audience": GRAFANA_AUDIENCE,
-         "description": "Azure Managed Grafana — Azure resources, metrics, logs and dashboards"}
-        for index, hostname in enumerate(hostnames)
-    ]
-
-
-def cosmos_specs(values):
-    specs = []
-    for index, value in enumerate(values):
-        url, audience = split_option(value, "--cosmos", "URL=AUDIENCE")
-        specs.append({
-            "label": label_for("cosmos", index),
-            "url": ends_with_path(url, COSMOS_MCP_PATH),
-            "audience": audience,
-            "description": "Azure Cosmos DB — databases, documents, schema and vector search",
-        })
-    return specs
-
-
-def mcp_specs(values):
-    """LABEL=URL, or LABEL=URL=AUDIENCE when the server wants an Entra token."""
-    specs = []
-    for value in values:
-        fields = value.split("=", 2)
-        if len(fields) < 2 or not all(fields):
-            raise SystemExit(f"--mcp {value} must be LABEL=URL or LABEL=URL=AUDIENCE")
-        specs.append({"label": fields[0], "url": fields[1], "description": None,
-                      "audience": fields[2] if len(fields) > 2 else None})
-    return specs
-
-
-def connection_specs(values):
-    return [
-        dict(zip(("label", "connection_id"), split_option(value, "--connection", "LABEL=CONNECTION_ID")))
-        for value in values
-    ]
-
-
-def build_specs(args):
-    """One flat list of servers, whichever option each of them arrived on."""
-    return (grafana_specs(args.grafana) + cosmos_specs(args.cosmos)
-            + mcp_specs(args.mcp) + connection_specs(args.connection))
-
-
-def get_tool_filter(args):
-    if args.allowed_tool:
-        return args.allowed_tool
-    if args.read_only:
-        # Only servers that annotate their tools with readOnlyHint match this.
-        return MCPToolFilter(read_only=True)
-    return None
-
-
-def get_token(credential, audience, cache):
-    """One token per audience — several Grafana workspaces share the audience."""
-    if audience not in cache:
-        cache[audience] = credential.get_token(f"{audience.rstrip('/')}/.default").token
-    return cache[audience]
-
-
-def build_tool(spec, allowed_tools, credential, tokens):
-    """Declare one server as a tool on the agent.
-
-    The service calls the server itself, so what it needs is a URL it can reach and
-    a credential to present. Nothing is proxied through this process.
+    Failing here beats sending audio the service accepts and then hears as noise.
     """
-    common = {"server_label": spec["label"], "require_approval": APPROVAL_NEVER,
-              "allowed_tools": allowed_tools}
+    with wave.open(path, "rb") as audio:
+        rate, channels, width = audio.getframerate(), audio.getnchannels(), audio.getsampwidth()
+        frames = audio.readframes(audio.getnframes())
 
-    if spec.get("connection_id"):
-        # The connection holds the credential, so the agent authenticates as the
-        # project identity and this version keeps working after today.
-        return MCPTool(**common, project_connection_id=spec["connection_id"])
-
-    optional = {}
-    if spec.get("description"):
-        optional["server_description"] = spec["description"]
-    if spec.get("audience"):
-        optional["authorization"] = get_token(credential, spec["audience"], tokens)
-    return MCPTool(**common, server_url=spec["url"], **optional)
+    if channels != CHANNELS or width != SAMPLE_WIDTH_BYTES or rate not in INPUT_SAMPLE_RATES:
+        raise SystemExit(
+            f"{path} is {rate} Hz, {channels} channel(s), {width * 8}-bit — needs 16-bit mono at "
+            f"{'/'.join(str(r) for r in INPUT_SAMPLE_RATES)} Hz. Convert it with: "
+            f"ffmpeg -i {path} -ac 1 -ar 24000 -sample_fmt s16 converted.wav"
+        )
+    return frames, rate
 
 
-def build_tools(specs, allowed_tools, credential):
-    tokens, tools = {}, []
-    for spec in specs:
-        tools.append(build_tool(spec, allowed_tools, credential, tokens))
-        print(f"attached {spec['label']} — {spec.get('url') or spec['connection_id']}")
-    return tools
+def write_wave(path, audio):
+    with wave.open(path, "wb") as out:
+        out.setnchannels(CHANNELS)
+        out.setsampwidth(SAMPLE_WIDTH_BYTES)
+        out.setframerate(OUTPUT_SAMPLE_RATE)
+        out.writeframes(audio)
 
 
-def create_version(project, args, specs, credential):
-    """A prompt agent is declarative — model, instructions and servers live in the
-    service, and it calls the servers itself. Nothing runs in this process.
+def get_model(args):
+    """The model to talk to, or None when an agent brings its own."""
+    return None if args.agent_name else (args.model or DEFAULT_MODEL)
 
-    A new version every run, because --auth-mode token writes a bearer token into
-    the definition and that token expires within the hour. Versions are cheap, and
-    the alternative is an agent that starts failing on its second day.
+
+def build_session(args, sample_rate):
+    """What the session should be, in one object the service applies at once.
+
+    Fields are only set once they have a value: a field left out keeps the
+    service's own default, while one set to None is sent as an explicit null and
+    overwrites that default. The model is left out entirely — connect() already
+    chose it, from --model or from the agent.
+
+    --mic and --audio-in differ in one place: with a microphone the service decides
+    when a turn ended, and with a file this script does, because the turn is the
+    whole file.
     """
-    agent = project.agents.create_version(
-        agent_name=args.agent_name,
-        definition=PromptAgentDefinition(
-            model=args.deployment,
-            instructions=INSTRUCTIONS,
-            tools=build_tools(specs, get_tool_filter(args), credential),
-        ),
+    transcription = AudioInputTranscriptionOptions(model=TRANSCRIPTION_MODEL)
+    if args.language:
+        transcription.language = args.language
+
+    session = RequestSession(
+        modalities=[Modality.TEXT, Modality.AUDIO],
+        voice=AzureStandardVoice(name=args.voice),
+        input_audio_format=InputAudioFormat.PCM16,
+        input_audio_sampling_rate=sample_rate,
+        input_audio_transcription=transcription,
     )
-    print(f"agent {agent.name} version {agent.version} created")
-    return agent
+    # An agent brings its own instructions, and overwriting them with the default
+    # of this script would throw away the reason for pointing at an agent at all.
+    if args.instructions or not args.agent_name:
+        session.instructions = args.instructions or INSTRUCTIONS
+
+    if args.mic:
+        session.turn_detection = AzureSemanticVad(interrupt_response=True)
+    else:
+        # Explicitly null, not merely absent: absent leaves the service listening
+        # for a pause that a file streamed at full speed never contains.
+        session["turn_detection"] = None
+    return session
 
 
-def agent_exists(project, agent_name):
-    """Whether the agent predates this run, which decides if a failure may delete it."""
+async def send_audio(connection, audio):
+    """Push raw pcm16 into the input buffer in chunks."""
+    for start in range(0, len(audio), CHUNK_BYTES):
+        chunk = audio[start:start + CHUNK_BYTES]
+        await connection.input_audio_buffer.append(audio=base64.b64encode(chunk).decode())
+
+
+class Speaker:
+    """Plays what arrives while the rest of the answer is still arriving.
+
+    The sound card pulls from a buffer on its own thread, so appending to it must
+    never block — which is why this is a buffer and not a write() call.
+    """
+
+    def __init__(self, sounddevice):
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
+        self._stream = sounddevice.RawOutputStream(
+            samplerate=OUTPUT_SAMPLE_RATE, channels=CHANNELS, dtype="int16",
+            blocksize=MIC_BLOCK_FRAMES, callback=self._fill,
+        )
+
+    def _fill(self, outdata, frames, time_info, status):
+        wanted = len(outdata)
+        with self._lock:
+            chunk = bytes(self._buffer[:wanted])
+            del self._buffer[:wanted]
+        outdata[:len(chunk)] = chunk
+        # Silence rather than whatever was in the buffer last time.
+        outdata[len(chunk):] = b"\x00" * (wanted - len(chunk))
+
+    def play(self, audio):
+        with self._lock:
+            self._buffer.extend(audio)
+
+    def stop(self):
+        """Drop what is queued, so an interrupted answer stops mid-sentence."""
+        with self._lock:
+            self._buffer.clear()
+
+    def __enter__(self):
+        self._stream.start()
+        return self
+
+    def __exit__(self, *_exception):
+        self._stream.stop()
+        self._stream.close()
+
+
+def import_sounddevice():
     try:
-        project.agents.get(agent_name)
-        return True
-    except ResourceNotFoundError:
-        return False
+        import sounddevice
+    except OSError as error:  # PortAudio itself is missing
+        raise SystemExit(f"sounddevice could not load PortAudio: {error}") from None
+    except ImportError:
+        raise SystemExit("--mic needs the sounddevice package: pip install sounddevice") from None
+    return sounddevice
 
 
-def print_tool_activity(response):
-    """MCP work shows up in the output as its own items, next to the answer."""
-    for item in response.output:
-        if item.type not in MCP_OUTPUT_TYPES:
-            continue
-        if item.type == "mcp_list_tools":
-            names = [tool.name for tool in getattr(item, "tools", None) or []]
-            print(f"  [{getattr(item, 'server_label', '?')} offers {', '.join(names) or 'nothing'}]")
-            continue
-        error = getattr(item, "error", None)
-        print(f"  [{getattr(item, 'server_label', '?')}.{getattr(item, 'name', item.type)}"
-              f"{' failed: ' + str(error) if error else ''}]")
+async def send_microphone(connection, queue):
+    """Forward microphone blocks until the task is cancelled."""
+    while True:
+        chunk = await queue.get()
+        await connection.input_audio_buffer.append(audio=base64.b64encode(chunk).decode())
 
 
-def ask(client, conversation_id, question, show_tools):
-    print(f"\n> {question}")
-    response = client.responses.create(conversation=conversation_id, input=question)
-    if show_tools:
-        print_tool_activity(response)
-    print(response.output_text)
+def open_microphone(sounddevice, loop, queue):
+    def on_block(indata, frames, time_info, status):
+        # Called on the sound card's thread, so hand the bytes over rather than
+        # touching the event loop from here.
+        loop.call_soon_threadsafe(queue.put_nowait, bytes(indata))
+
+    return sounddevice.RawInputStream(
+        samplerate=MIC_SAMPLE_RATE, channels=CHANNELS, dtype="int16",
+        blocksize=MIC_BLOCK_FRAMES, callback=on_block,
+    )
+
+
+async def receive(connection, spoken, speaker, stop_after_response):
+    """Read server events until the answer is done, appending audio to `spoken`.
+
+    The caller owns the buffer so that a conversation cut short by Ctrl+C still
+    leaves behind everything that had been said by then.
+    """
+    async for event in connection:
+        if event.type == ServerEventType.ERROR:
+            raise SystemExit(f"{event.error.type}: {event.error.message}")
+
+        if event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
+            print(f"\n> {event.transcript}")
+        elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
+            spoken.extend(event.delta)
+            if speaker:
+                speaker.play(event.delta)
+        elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DONE:
+            print(event.transcript)
+        elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED and speaker:
+            # Barge-in: the assistant is talking and the user started anyway.
+            speaker.stop()
+        elif event.type == ServerEventType.RESPONSE_DONE and stop_after_response:
+            return
+
+
+async def run_file(connection, audio, spoken):
+    """Speak the file, close the turn, and wait for the one answer it earns."""
+    await send_audio(connection, audio)
+    await connection.input_audio_buffer.commit()
+    await connection.response.create()
+    await receive(connection, spoken, speaker=None, stop_after_response=True)
+
+
+async def run_microphone(connection, args, spoken, sounddevice):
+    """Talk until Ctrl+C or --seconds, with the service deciding where turns end."""
+    queue = asyncio.Queue()
+    microphone = open_microphone(sounddevice, asyncio.get_running_loop(), queue)
+
+    print("listening — Ctrl+C to stop")
+    with Speaker(sounddevice) as speaker, microphone:
+        # Sending and receiving have to run at once, or the assistant could not be
+        # interrupted while it is still speaking.
+        sender = asyncio.create_task(send_microphone(connection, queue))
+        try:
+            await asyncio.wait_for(
+                receive(connection, spoken, speaker, stop_after_response=False),
+                timeout=args.seconds,  # None waits for Ctrl+C instead
+            )
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            sender.cancel()
+            # Let the cancellation land, so shutdown is quiet rather than a
+            # warning about a task destroyed while still pending.
+            await asyncio.gather(sender, return_exceptions=True)
+
+
+def create_credential(args):
+    """The Voice Live SDK asks the credential for a token itself, so the keyless
+    path needs no bearer token provider."""
+    if args.auth == "api-key":
+        return AzureKeyCredential(args.api_key)
+    return identity.get_credential(args)
+
+
+def build_connect_arguments(args):
+    """Which of the two ways to reach the service this run is using."""
+    common = {"endpoint": args.endpoint, "credential": create_credential(args)}
+    if args.agent_name:
+        return {**common, "agent_name": args.agent_name, "project_name": args.project_name,
+                "agent_version": args.agent_version}
+    return {**common, "model": get_model(args)}
+
+
+async def converse(args, spoken):
+    # Both input paths are settled before dialing out, so an unusable file or a
+    # machine without a sound card costs nothing.
+    audio, sample_rate = read_wave(args.audio_in) if args.audio_in else (None, MIC_SAMPLE_RATE)
+    sounddevice = import_sounddevice() if args.mic else None
+
+    async with connect(**build_connect_arguments(args)) as connection:
+        await connection.session.update(session=build_session(args, sample_rate))
+        print(f"connected to {args.agent_name or get_model(args)}")
+
+        if args.audio_in:
+            await run_file(connection, audio, spoken)
+        else:
+            await run_microphone(connection, args, spoken, sounddevice)
 
 
 def main():
     args = parse_args()
-    # Before the first network call, so a malformed --cosmos or --mcp fails on the spot.
-    specs = build_specs(args)
-    credential = identity.get_credential(args)
-    project = AIProjectClient(endpoint=args.endpoint, credential=credential)
-
-    existed = agent_exists(project, args.agent_name)
+    spoken = bytearray()
     try:
-        agent = create_version(project, args, specs, credential)
-        # Same client bound to the agent, so responses run through its tools.
-        agent_client = project.get_openai_client(agent_name=agent.name)
-        conversation = agent_client.conversations.create()
-        for question in args.question:
-            ask(agent_client, conversation.id, question, args.show_tools)
-    except BaseException as error:
-        # Roll back only an agent this run brought into existence, never one it
-        # merely added a version to.
-        if not existed:
-            print(f"\n{type(error).__name__}: {error}")
-            try:
-                project.agents.delete(args.agent_name)
-                print(f"deleted agent {args.agent_name}")
-            except Exception as cleanup_error:  # noqa: BLE001 — the original error matters more
-                print(f"could not delete agent {args.agent_name}: {cleanup_error}")
-        project.close()
-        raise
+        asyncio.run(converse(args, spoken))
+    except KeyboardInterrupt:
+        print()
 
-    if args.delete:
-        project.agents.delete(args.agent_name)
-        print(f"deleted agent {args.agent_name}")
-    project.close()
+    if not spoken:
+        print("no audio came back")
+        return
+    write_wave(args.audio_out, bytes(spoken))
+    print(f"\n{args.audio_out}")
 
 
 if __name__ == "__main__":
