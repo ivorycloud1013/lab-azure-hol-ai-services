@@ -10,6 +10,10 @@ hol-foundry-agents-prompt.py
 hol-foundry-agents-responses.py
 hol-foundry-models-*.py
 hol-foundry-tools-*.py
+# The AI Search seeding script and the schema module it reads. Both run on the
+# jumpbox before the lab starts; the container never indexes anything.
+aisrch-*.py
+aisrch_*.py
 
 # Local tooling and its dependencies, which the container never installs.
 Makefile
