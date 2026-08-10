@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--tts-input", help="TTS: synthesize this text into --tts-output")
     parser.add_argument("--stt-input", metavar="WAV", help="STT: transcribe this audio file")
     parser.add_argument("--tts-output", default="speech.wav", help="TTS output file")
-    parser.add_argument("--tts-voice", default="en-US-AvaMultilingualNeural", help="TTS voice, e.g. ko-KR-SunHiNeural")
+    parser.add_argument("--tts-voice", default="en-US-Ava:DragonHDLatestNeural", help="TTS voice, e.g. ko-KR-SunHiNeural")
     parser.add_argument("--stt-lang", default="ko-KR", help="STT recognition language, e.g. ko-KR")
 
     quality = parser.add_argument_group("STT 인식 품질")
