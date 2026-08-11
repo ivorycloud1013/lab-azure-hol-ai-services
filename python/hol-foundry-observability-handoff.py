@@ -31,7 +31,10 @@ def parse_args():
                "with the reason the model itself supplied. That is the difference from "
                "-sequential, where the order is in the source and no agent chooses. The "
                "handoff_to call is answered like any other tool: leaving a function call "
-               "unanswered in a conversation is how the next agent's request gets rejected.",
+               "unanswered in a conversation is how the next agent's request gets rejected. "
+               "Only one of those two spans is the service's, so the portal shows the handoff "
+               "as a decision rather than a tool call unless the run passes "
+               "--trace-export azure-monitor.",
     )
     parser.add_argument("--endpoint",
                         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT") or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),

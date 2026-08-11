@@ -17,6 +17,18 @@ Providers are built by hand rather than through configure_azure_monitor(). Hand-
 the only way to attach an in-memory exporter *and* a network exporter *and* an in-memory
 metric reader in one pass, and the in-memory pair is what
 hol-foundry-observability-verify.py asserts against.
+
+A run has two sources of spans and they reach Application Insights by different routes.
+Connecting an Application Insights resource to the project turns on server-side tracing,
+and from then on the service records invoke_agent, chat and its own execute_tool spans
+with no code involved — they arrive tagged cloud_RoleName "responsesapi" and
+microsoft.foundry "True". Everything this lab names itself — the scenario root,
+agent_to_agent_interaction, agent.state.management, the execute_tool spans for tools that
+ran in this process — is client-side, and it only leaves the machine when
+--trace-export azure-monitor is given. Both halves carry the same trace id either way,
+because traceparent rides along on the service calls, so the flag is the whole difference
+between one tree in the portal and a headless trace of service spans hanging off parents
+that were never sent.
 """
 
 import contextlib
@@ -185,8 +197,9 @@ def validate_tracing_arguments(parser, args):
     if "azure-monitor" in args.trace_export and not args.connection_string:
         parser.error("--trace-export azure-monitor needs --connection-string or "
                      "APPLICATIONINSIGHTS_CONNECTION_STRING. In the Foundry portal open "
-                     "Observability > Traces and select Connect to attach an Application "
-                     "Insights resource, then copy its connection string")
+                     "Agents > Traces and select Connect to attach an Application Insights "
+                     "resource, then copy its connection string. The classic portal keeps "
+                     "the same view under Tracing in the left navigation")
 
 
 class TraceCapture:
@@ -621,12 +634,23 @@ def announce(args, root):
 
     Printed rather than logged because the trace id is the one thing you need in your hand
     to go find this run in the portal afterwards.
+
+    When nothing is going to Azure Monitor the trace id is still worth having — the
+    service's own spans will be filed under it — but it no longer leads to this run's
+    tree, and the warning says so before the run rather than after the portal disappoints.
     """
     trace_id = format_trace_id(root.get_span_context().trace_id)
     print(f"trace {trace_id}")
     print(f"  service {args.service_name}, "
           f"sensitive data {'on' if args.sensitive_data else 'off'}, "
           f"export {'+'.join(args.trace_export) or 'memory'}")
+
+    if "azure-monitor" not in args.trace_export:
+        print("  ! these spans are not going to Application Insights, so the portal will "
+              "not show the scenario root or any span this lab names itself")
+        print("  ! the service still records its own invoke_agent, chat and execute_tool "
+              "spans under this trace id, rooted at parents that were never sent — pass "
+              "--trace-export azure-monitor to send the other half and make it one tree")
     return trace_id
 
 

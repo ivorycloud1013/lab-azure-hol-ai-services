@@ -43,8 +43,10 @@ def parse_args():
                "vocabulary in one trace, including the two spans the others have no use for: "
                "agent_planning, which records the decomposition before any agent runs, and "
                "agent_orchestration, which is the bracket around the turns that carries out "
-               "the plan. Run it, then look for these span names in the Foundry portal under "
-               "Observability > Traces alongside the SDK's own.",
+               "the plan. Run it with --trace-export azure-monitor — none of these spans are "
+               "the service's, so without that flag none of them leave the machine — then "
+               "look for the names in the Foundry portal under Agents > Traces alongside the "
+               "SDK's own.",
     )
     parser.add_argument("--endpoint",
                         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT") or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),

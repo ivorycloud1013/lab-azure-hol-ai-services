@@ -55,7 +55,7 @@ def parse_args():
                "--check-app-insights adds the one assertion the in-process pipeline cannot "
                "make, that the traces actually reached Application Insights; it needs the "
                "project connected to an Application Insights resource (Foundry portal, "
-               "Observability > Traces > Connect) and the Log Analytics Reader role on it. "
+               "Agents > Traces > Connect) and the Log Analytics Reader role on it. "
                "Traces take 2-5 minutes to land, so that check polls.",
     )
     parser.add_argument("--endpoint",

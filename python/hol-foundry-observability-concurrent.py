@@ -34,7 +34,9 @@ def parse_args():
                "same task. Each branch gets its own conversation because a shared one would let "
                "the branches read each other, which is the one thing a fan-out must not do — "
                "-sequential is the scenario that shares one on purpose. The SDK calls block, so "
-               "the fan-out is asyncio.to_thread rather than a second async client surface.",
+               "the fan-out is asyncio.to_thread rather than a second async client surface. The "
+               "overlap is only visible in the portal with --trace-export azure-monitor, since "
+               "the branch spans this file opens are its own and not the service's.",
     )
     parser.add_argument("--endpoint",
                         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT") or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),

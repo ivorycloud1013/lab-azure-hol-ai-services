@@ -35,7 +35,10 @@ def parse_args():
                "Sibling scenarios: -concurrent (the same agents answering at once), -handoff "
                "(the agents choose who goes next), -semconv (the whole coordination vocabulary). "
                "hol-foundry-observability-verify.py runs all of them and asserts what each "
-               "should have emitted.",
+               "should have emitted. To see this run in the Foundry portal under "
+               "Agents > Traces, pass --trace-export azure-monitor — the service traces its "
+               "own calls once Application Insights is connected, but the spans above are "
+               "this process's and go nowhere without it.",
     )
     parser.add_argument("--endpoint",
                         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT") or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
