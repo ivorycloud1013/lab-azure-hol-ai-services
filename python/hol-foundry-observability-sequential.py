@@ -85,15 +85,13 @@ def main():
         identity.get_credential(args) as credential,
         AIProjectClient(endpoint=args.endpoint, credential=credential, allow_preview=True) as project,
         observability.agent_versions(project, observability.specs_for(*PIPELINE),
-                                     args.deployment, schemas) as agents,
+                                     args.deployment, schemas, args.keep) as agents,
         project.get_openai_client() as client,
     ):
         observability.announce(args, root)
         print(f"  pipeline {' -> '.join(PIPELINE)}")
 
-        conversation = client.conversations.create()
-        print(f"  conversation {conversation.id}")
-        try:
+        with observability.conversation(client, args.keep) as conversation:
             # The task rides on the first turn only. After that the conversation holds it.
             prompt = f"task: {task}\n\n{STEPS[PIPELINE[0]]}"
             previous = None
@@ -110,8 +108,6 @@ def main():
                 print(f"\n  [{name}] {text}")
                 transcript += text
                 previous = name
-        finally:
-            client.conversations.delete(conversation_id=conversation.id)
 
     observability.report(args, capture)
 

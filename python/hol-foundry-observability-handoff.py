@@ -126,15 +126,13 @@ def main():
         tracer.start_as_current_span("Scenario: handoff", kind=SpanKind.CLIENT) as root,
         identity.get_credential(args) as credential,
         AIProjectClient(endpoint=args.endpoint, credential=credential, allow_preview=True) as project,
-        observability.agent_versions(project, specs, args.deployment, schemas) as agents,
+        observability.agent_versions(project, specs, args.deployment, schemas, args.keep) as agents,
         project.get_openai_client() as client,
     ):
         observability.announce(args, root)
         print(f"  start {START}, at most {args.turn_limit} turns, routing chosen by the agents")
 
-        conversation = client.conversations.create()
-        print(f"  conversation {conversation.id}")
-        try:
+        with observability.conversation(client, args.keep) as conversation:
             current = START
             prompt = (f"task: {task}\n\nAnswer what you can. When another agent should take "
                       f"over, call {HANDOFF_TOOL} instead of guessing.")
@@ -160,8 +158,6 @@ def main():
                 prompt = "You have been handed the task. Continue it."
             else:
                 print(f"\n  stopped at the {args.turn_limit} turn limit")
-        finally:
-            client.conversations.delete(conversation_id=conversation.id)
 
     observability.report(args, capture)
 

@@ -187,6 +187,13 @@ def add_cast_arguments(parser):
     group.add_argument("--inject-error", action="store_true",
                        help=f"tell the agents to look up {FAILING_SERVICE}, which the tool "
                             "refuses — the way to see an ERROR span and error.type")
+    group.add_argument("--keep", action="store_true",
+                       help="leave the agents and the conversation in the project instead "
+                            "of deleting them. The portal builds its rows from resources "
+                            "that still exist, so a run that cleans up can leave a complete "
+                            "trace in Application Insights and nothing to open it from. "
+                            "What this leaves behind is yours to delete — a later run "
+                            "without --keep only removes the version it made itself")
     return group
 
 
@@ -485,7 +492,7 @@ def build_task(args):
 
 
 @contextlib.contextmanager
-def agent_versions(project, specs, model, schemas):
+def agent_versions(project, specs, model, schemas, keep=False):
     """Create one Foundry agent per spec, hand them back by name, delete them on the way out.
 
     This is where the create_agent spans come from — the instrumentor traces the create
@@ -498,6 +505,11 @@ def agent_versions(project, specs, model, schemas):
 
     Deleting is in a finally block because a failed run leaves the versions behind
     otherwise, and the next run would stack another version on top of them.
+
+    keep turns the deleting off. It is for the portal rather than the trace — the spans
+    reach Application Insights either way, but the portal lists agents that exist, so the
+    tidiest run is also the one that leaves nothing to click. A kept run stacks a new
+    version on the next pass, which is the price of being able to see it.
     """
     created = {}
     try:
@@ -512,12 +524,32 @@ def agent_versions(project, specs, model, schemas):
             )
         yield created
     finally:
-        for name, version in created.items():
-            try:
-                project.agents.delete_version(agent_name=version.name,
-                                              agent_version=version.version, force=True)
-            except Exception as error:  # noqa: BLE001 - one bad delete must not skip the rest
-                print(f"  could not delete agent {name} version {version.version}: {error}")
+        if keep:
+            for name, version in created.items():
+                print(f"  kept agent {version.name} version {version.version}")
+        else:
+            for name, version in created.items():
+                try:
+                    project.agents.delete_version(agent_name=version.name,
+                                                  agent_version=version.version, force=True)
+                except Exception as error:  # noqa: BLE001 - one bad delete must not skip the rest
+                    print(f"  could not delete agent {name} version {version.version}: {error}")
+
+
+@contextlib.contextmanager
+def conversation(client, keep):
+    """Open a conversation, hand it back, delete it on the way out unless asked not to.
+
+    The id is printed because it is what the portal keys its conversation view on, and a
+    run worth keeping is a run you are about to go and look for.
+    """
+    created = client.conversations.create()
+    print(f"  conversation {created.id}{' (kept)' if keep else ''}")
+    try:
+        yield created
+    finally:
+        if not keep:
+            client.conversations.delete(conversation_id=created.id)
 
 
 def agent_reference(agent):

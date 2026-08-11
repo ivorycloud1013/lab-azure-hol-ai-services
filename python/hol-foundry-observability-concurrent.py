@@ -60,18 +60,15 @@ def parse_args():
     return args
 
 
-def branch(client, agent, task, angle, handlers, sensitive):
+def branch(client, agent, task, angle, handlers, sensitive, keep):
     """One branch, start to finish, on a conversation nobody else touches."""
-    conversation = client.conversations.create()
-    try:
+    with observability.conversation(client, keep) as conversation:
         text, _ = observability.run_turn(client, agent, conversation.id,
                                          f"task: {task}\n\n{angle}", handlers, sensitive)
         return text
-    finally:
-        client.conversations.delete(conversation_id=conversation.id)
 
 
-async def fan_out(client, agents, task, handlers, sensitive):
+async def fan_out(client, agents, task, handlers, sensitive, keep):
     """Every branch at once.
 
     The OpenTelemetry context does not follow a thread on its own, so each worker attaches
@@ -83,7 +80,7 @@ async def fan_out(client, agents, task, handlers, sensitive):
     def in_context(name):
         token = otel_context.attach(current)
         try:
-            return branch(client, agents[name], task, ANGLES[name], handlers, sensitive)
+            return branch(client, agents[name], task, ANGLES[name], handlers, sensitive, keep)
         finally:
             otel_context.detach(token)
 
@@ -106,13 +103,14 @@ def main():
         identity.get_credential(args) as credential,
         AIProjectClient(endpoint=args.endpoint, credential=credential, allow_preview=True) as project,
         observability.agent_versions(project, observability.specs_for(*BRANCHES, AGGREGATOR),
-                                     args.deployment, schemas) as agents,
+                                     args.deployment, schemas, args.keep) as agents,
         project.get_openai_client() as client,
     ):
         observability.announce(args, root)
         print(f"  branches {', '.join(BRANCHES)}, then {AGGREGATOR} aggregates")
 
-        answers = asyncio.run(fan_out(client, agents, task, handlers, args.sensitive_data))
+        answers = asyncio.run(fan_out(client, agents, task, handlers, args.sensitive_data,
+                                      args.keep))
         for name, text in zip(BRANCHES, answers):
             print(f"\n  [{name}] {text}")
 
@@ -122,16 +120,13 @@ def main():
             observability.handoff(name, AGGREGATOR, "fan-in: every branch has answered")
 
         sections = "\n\n".join(f"{name}:\n{text}" for name, text in zip(BRANCHES, answers))
-        conversation = client.conversations.create()
-        observability.record_state(conversation.id, len(sections))
-        try:
+        with observability.conversation(client, args.keep) as conversation:
+            observability.record_state(conversation.id, len(sections))
             summary, _ = observability.run_turn(
                 client, agents[AGGREGATOR], conversation.id,
                 f"task: {task}\n\nThree agents answered it separately. Consolidate them.\n\n{sections}",
                 handlers, args.sensitive_data)
             print(f"\n  [{AGGREGATOR}] {summary}")
-        finally:
-            client.conversations.delete(conversation_id=conversation.id)
 
     observability.report(args, capture)
 

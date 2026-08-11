@@ -138,7 +138,8 @@ def main():
                                      kind=SpanKind.CLIENT) as root,
         identity.get_credential(args) as credential,
         AIProjectClient(endpoint=args.endpoint, credential=credential, allow_preview=True) as project,
-        observability.agent_versions(project, list(specs.values()), args.deployment, schemas) as agents,
+        observability.agent_versions(project, list(specs.values()), args.deployment, schemas,
+                                     args.keep) as agents,
         project.get_openai_client() as client,
     ):
         observability.announce(args, root)
@@ -152,11 +153,10 @@ def main():
                 planning.set_attribute("plan.steps", [f"{name}: {prompt}" for name, prompt in PLAN])
                 print(f"  planned {len(PLAN)} steps")
 
-            conversation = client.conversations.create()
-            transcript = ""
-            previous = None
+            with observability.conversation(client, args.keep) as conversation:
+                transcript = ""
+                previous = None
 
-            try:
                 with tracer.start_as_current_span(SPAN_ORCHESTRATION) as orchestration:
                     orchestration.set_attribute("participants", [name for name, _ in PLAN])
 
@@ -177,8 +177,6 @@ def main():
                         print(text)
                         transcript += text
                         previous = name
-            finally:
-                client.conversations.delete(conversation_id=conversation.id)
 
             record_tool_call(tracer, "compute_slo",
                              {"good_events": 9_973, "total_events": 10_000},
