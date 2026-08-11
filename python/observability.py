@@ -354,33 +354,17 @@ def build_cast(args):
     """Five agents on one chat client, returned by name so each scenario can pick the
     subset its pattern needs.
 
-    KNOWN LIMITATION — reasoning models. Verified failing against gpt-5.6-terra on
-    2026-08-11: as soon as one agent calls a tool and its turn is handed to the next
-    agent, the run dies with
-
-        ChatClientInvalidRequestException: Stateless replay cannot reconstruct
-        reasoning item(s) rs_... for call(s) call_... because encrypted reasoning
-        content is missing.
-
-    A reasoning model pairs a text_reasoning item with the function_call in one group.
-    Crossing an agent boundary replays that group statelessly, and the encrypted payload
-    that would make it replayable does not survive the crossing. Everything before that
-    point works — provider wiring, span capture, workflow build, the first agent's tools.
-
-    What does not fix it: SequentialBuilder(chain_only_agent_responses=True). The
-    response messages carry the group too.
-
-    Where the fix lives, for whoever picks this up:
-      - AgentExecutor(agent, context_mode="custom", context_filter=...) in
-        agent_framework/_workflows/_agent_executor.py takes list[Message] -> list[Message].
-        Dropping text_reasoning, function_call and function_result contents there should
-        clear it. SequentialBuilder and ConcurrentBuilder accept Executors as
-        participants, so those two can use it directly.
-      - HandoffBuilder, GroupChatBuilder and MagenticBuilder accept Agents only, so they
-        need the other route the exception names: service-side continuation
-        (agent_framework_openai/_chat_client.py:1407, request_uses_service_side_storage)
-        or an explicit compaction_strategy (agent_framework/_compaction.py).
-      - Or run the lab on a non-reasoning deployment, which sidesteps all of it.
+    A note that used to live here claimed reasoning models break every pattern that hands
+    one agent's tool call to the next, with a "Stateless replay cannot reconstruct
+    reasoning item(s)" exception. Running all five patterns end to end against
+    gpt-5.6-terra on agent-framework-core 1.13.0 / orchestrations 1.0.2 did not reproduce
+    it once, so the note is gone rather than left to be trusted. What actually blocked the
+    lab was HandoffBuilder's require_per_service_call_history_persistence check, handled
+    below. If the replay exception does come back, the framework's own answer to it is
+    agent_framework_orchestrations._orchestrator_helpers.clean_conversation_for_handoff,
+    which handoff and group chat already apply to every message they pass on; sequential
+    is the pattern with no such guard, and AgentExecutor(context_mode="custom",
+    context_filter=...) is where one would go.
 
     Every agent gets an explicit id. Foundry correlates traces from agents it does not
     host by gen_ai.agent.id on the create_agent span, so an agent without one is an
@@ -393,47 +377,59 @@ def build_cast(args):
     )
     tools = build_tools(args.inject_error)
 
+    def make(name, description, instructions, agent_tools=None):
+        """One agent, built the way every agent in this cast is built.
+
+        The id is explicit and derived from the name so the two never drift apart.
+
+        require_per_service_call_history_persistence is on for all five because
+        HandoffBuilder.build() refuses to build without it on every participant — a handoff
+        is a tool call that short-circuits the agent's turn, and the flag is what keeps the
+        local history consistent with the service across that short-circuit. It costs the
+        other four patterns nothing: the flag installs its middleware only when the agent
+        has a HistoryProvider, and none of these do.
+        """
+        return Agent(
+            client=client,
+            id=f"hol-obs-{name}",
+            name=name,
+            description=description,
+            instructions=instructions,
+            tools=agent_tools,
+            require_per_service_call_history_persistence=True,
+        )
+
     return {
-        "researcher": Agent(
-            client=client,
-            id="hol-obs-researcher",
-            name="researcher",
-            description="Pulls metrics and incidents out of the telemetry store.",
-            instructions="You gather facts with the tools you have. Report numbers, never opinions. "
-                         "Answer in the language of the question.",
-            tools=tools,
+        "researcher": make(
+            "researcher",
+            "Pulls metrics and incidents out of the telemetry store.",
+            "You gather facts with the tools you have. Report numbers, never opinions. "
+            "Answer in the language of the question.",
+            tools,
         ),
-        "analyst": Agent(
-            client=client,
-            id="hol-obs-analyst",
-            name="analyst",
-            description="Turns raw telemetry into a cause and an error-budget verdict.",
-            instructions="You explain what the numbers mean and compute the error budget. "
-                         "Answer in the language of the question.",
-            tools=tools,
+        "analyst": make(
+            "analyst",
+            "Turns raw telemetry into a cause and an error-budget verdict.",
+            "You explain what the numbers mean and compute the error budget. "
+            "Answer in the language of the question.",
+            tools,
         ),
-        "writer": Agent(
-            client=client,
-            id="hol-obs-writer",
-            name="writer",
-            description="Writes the on-call summary.",
-            instructions="You write at most three sentences an on-call engineer can act on. "
-                         "Answer in the language of the question.",
+        "writer": make(
+            "writer",
+            "Writes the on-call summary.",
+            "You write at most three sentences an on-call engineer can act on. "
+            "Answer in the language of the question.",
         ),
-        "reviewer": Agent(
-            client=client,
-            id="hol-obs-reviewer",
-            name="reviewer",
-            description="Checks the summary against the evidence.",
-            instructions="You check every claim against what the other agents found and say "
-                         "APPROVED when it holds up. Answer in the language of the question.",
+        "reviewer": make(
+            "reviewer",
+            "Checks the summary against the evidence.",
+            "You check every claim against what the other agents found and say "
+            "APPROVED when it holds up. Answer in the language of the question.",
         ),
-        "manager": Agent(
-            client=client,
-            id="hol-obs-manager",
-            name="manager",
-            description="Coordinates the team.",
-            instructions="You coordinate the team to answer the task with as few turns as possible.",
+        "manager": make(
+            "manager",
+            "Coordinates the team.",
+            "You coordinate the team to answer the task with as few turns as possible.",
         ),
     }
 
@@ -446,12 +442,37 @@ def build_task(args):
             f"{FAILING_SERVICE} and report what happened when you did.")
 
 
-def run_scenario(args, run, title):
+def record_agent_creation(cast):
+    """Open one create_agent span per agent in the cast.
+
+    Agent Framework reserves this operation name but never opens the span for an agent you
+    constructed yourself — it has nothing to report about a creation it did not perform.
+    The span is still the one the convention puts gen_ai.agent.id on, and that id is how
+    Foundry groups the traces of agents it does not host, so a run without it is a run the
+    portal cannot attribute to an agent.
+
+    It is emitted here rather than in build_cast because build_cast runs before the root
+    span opens. A create_agent span started there would land in a trace of its own, which
+    is the opposite of what an id meant for correlation is for.
+    """
+    tracer = get_tracer()
+    for agent in cast.values():
+        with tracer.start_as_current_span(f"create_agent {agent.name}", kind=SpanKind.CLIENT) as span:
+            span.set_attribute("gen_ai.operation.name", "create_agent")
+            span.set_attribute("gen_ai.agent.id", agent.id)
+            span.set_attribute("gen_ai.agent.name", agent.name)
+            if agent.description:
+                span.set_attribute("gen_ai.agent.description", agent.description)
+
+
+def run_scenario(args, run, title, cast):
     """The shell every scenario shares: configure, open a root span, run, report.
 
     The root span exists so a whole multi-agent run is one trace with one id. Without it
     each orchestration entry point would start its own trace and the portal would show
     the run as unrelated fragments.
+
+    The cast is passed in only so its agents can be announced inside that root span.
     """
     capture = configure(args)
 
@@ -461,6 +482,7 @@ def run_scenario(args, run, title):
         print(f"  service {args.service_name}, "
               f"sensitive data {'on' if args.sensitive_data else 'off'}, "
               f"export {'+'.join(args.trace_export) or 'memory'}")
+        record_agent_creation(cast)
         asyncio.run(run(capture))
 
     capture.flush()

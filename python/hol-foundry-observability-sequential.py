@@ -77,7 +77,7 @@ def main():
         print(f"  pipeline {' -> '.join(PIPELINE)}")
         await observability.stream(workflow, task)
 
-    observability.run_scenario(args, run, "Scenario: sequential")
+    observability.run_scenario(args, run, "Scenario: sequential", cast)
 
 
 if __name__ == "__main__":

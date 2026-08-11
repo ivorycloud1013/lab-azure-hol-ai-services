@@ -86,7 +86,7 @@ def main():
               f"{' then writer aggregates' if args.summarize else ''}")
         await observability.stream(workflow, task)
 
-    observability.run_scenario(args, run, "Scenario: concurrent")
+    observability.run_scenario(args, run, "Scenario: concurrent", cast)
 
 
 if __name__ == "__main__":

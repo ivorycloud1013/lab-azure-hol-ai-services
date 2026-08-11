@@ -188,7 +188,7 @@ def main():
     async def run(_capture):
         await collaborate(cast, task, get_tracer())
 
-    observability.run_scenario(args, run, "Scenario: multi-agent semantic conventions")
+    observability.run_scenario(args, run, "Scenario: multi-agent semantic conventions", cast)
 
 
 if __name__ == "__main__":

@@ -251,8 +251,11 @@ CHECKS = [
     ("A agent", "create_agent span", BUILDER_SCENARIOS, has_span("create_agent")),
     ("A agent", "agent identity attributes", BUILDER_SCENARIOS,
      has_attributes("invoke_agent", ["gen_ai.operation.name", "gen_ai.agent.name", "gen_ai.agent.id"])),
+    # gen_ai.provider.name, not gen_ai.system — the GenAI conventions renamed it and the
+    # framework followed. Asserting the old name asserts that nothing moved, which is the
+    # one thing a convention this young will not promise.
     ("A agent", "model call attributes", BUILDER_SCENARIOS,
-     has_attributes("chat", ["gen_ai.system", "gen_ai.response.id"])),
+     has_attributes("chat", ["gen_ai.provider.name", "gen_ai.response.id"])),
     ("A agent", "token usage attributes", BUILDER_SCENARIOS,
      has_attributes("chat", ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"])),
 

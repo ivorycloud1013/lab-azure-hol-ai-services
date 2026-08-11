@@ -85,7 +85,7 @@ def main():
         print(f"  start researcher, routes {routes}, {args.turn_limit} autonomous turns each")
         await observability.stream(workflow, task)
 
-    observability.run_scenario(args, run, "Scenario: handoff")
+    observability.run_scenario(args, run, "Scenario: handoff", cast)
 
 
 if __name__ == "__main__":

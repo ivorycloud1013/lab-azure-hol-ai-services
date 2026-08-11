@@ -117,7 +117,7 @@ def main():
         print(f"  manager over {', '.join(PARTICIPANTS)}, at most {args.max_rounds} rounds")
         await converse(workflow, task, args.show_ledger)
 
-    observability.run_scenario(args, run, "Scenario: magentic")
+    observability.run_scenario(args, run, "Scenario: magentic", cast)
 
 
 if __name__ == "__main__":
