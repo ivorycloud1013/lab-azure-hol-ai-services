@@ -1,36 +1,46 @@
 """Tracing plumbing and the agent cast for the hol-foundry-observability-*.py scripts.
 
 Both live here because every scenario needs both and neither is what a scenario is
-about. The orchestration — sequential, concurrent, handoff, group chat, magentic —
-stays in each scenario script, because that is the one thing those files exist to show.
+about. The orchestration — who speaks, in what order, and what each one is told — stays
+in each scenario script, because that is the one thing those files exist to show.
 
-Providers are built by hand rather than through configure_otel_providers(). Hand-built
-is the only way to attach an in-memory exporter *and* a network exporter *and* an
-in-memory metric reader in one pass, and the in-memory pair is what
-hol-foundry-observability-verify.py asserts against. See
-https://learn.microsoft.com/en-us/agent-framework/agents/observability ("Manual setup").
+The lab talks to Foundry through azure-ai-projects and the OpenAI Responses API, the
+shape the SDK's own telemetry samples use:
+https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/ai/azure-ai-projects/samples/agents/telemetry
+
+There is no orchestration framework under any of this. An agent is a Foundry resource
+you create; a turn is one responses.create call; a tool call is a loop you can read.
+That is deliberate — a trace is only worth reading if you can point at the line that
+produced each span.
+
+Providers are built by hand rather than through configure_azure_monitor(). Hand-built is
+the only way to attach an in-memory exporter *and* a network exporter *and* an in-memory
+metric reader in one pass, and the in-memory pair is what
+hol-foundry-observability-verify.py asserts against.
 """
 
-import asyncio
+import contextlib
 import json
 import os
 import time
-from typing import Annotated
 
-from agent_framework import Agent, AgentResponseUpdate, tool
-from agent_framework.foundry import FoundryChatClient
-from agent_framework.observability import create_resource, enable_instrumentation, get_tracer
-from opentelemetry import metrics, trace
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader, PeriodicExportingMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import SpanKind, format_trace_id
-from pydantic import Field
+from azure.core.settings import settings
 
-import identity
+# Azure Monitor's OpenTelemetry plugin has to be selected before any azure-core client is
+# built. AIProjectInstrumentor draws its spans through azure-core's tracing abstraction,
+# so without this line it has nowhere to put them and the lab traces nothing.
+settings.tracing_implementation = "opentelemetry"
+
+from azure.ai.projects.models import PromptAgentDefinition  # noqa: E402
+from opentelemetry import metrics, trace  # noqa: E402
+from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, PeriodicExportingMetricReader  # noqa: E402
+from opentelemetry.sdk.resources import Resource  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased  # noqa: E402
+from opentelemetry.trace import SpanKind, Status, StatusCode, format_trace_id  # noqa: E402
 
 TRACE_EXPORTS = ["memory", "console", "azure-monitor", "otlp"]
 DEFAULT_SERVICE_NAME = "hol-foundry-observability"
@@ -41,6 +51,13 @@ DEFAULT_TASK = (
     "and write a three-sentence summary an on-call engineer can act on."
 )
 
+# Agents are named resources in the project, so the names have to say whose they are.
+AGENT_PREFIX = "hol-obs-"
+
+# A turn that keeps calling tools is a turn that is not converging. Six is well past what
+# any scenario here needs and still stops a runaway loop from spending the whole budget.
+MAX_TOOL_ROUNDS = 6
+
 # The tool the model is told to call when --inject-error is set. Anything else would
 # make the failing span depend on the model inventing a bad argument on its own.
 FAILING_SERVICE = "unknown-service"
@@ -49,6 +66,17 @@ FAILING_SERVICE = "unknown-service"
 # pipeline batches. These bound the wait without turning a slow day into a false FAIL.
 APP_INSIGHTS_ATTEMPTS = 10
 APP_INSIGHTS_INTERVAL_SECONDS = 30
+
+# How long each lab tool took. The instrumentor times the model call but never the tool,
+# because the tool runs in our loop and it has no way to see it. get_meter hands back a
+# proxy until configure() installs the real provider, and the proxy re-creates its
+# instruments against it — so this records into whatever configure() sets up without
+# configure() having to pass it around.
+TOOL_DURATION = metrics.get_meter(__name__).create_histogram(
+    "hol.tool.invocation.duration",
+    unit="s",
+    description="Duration of a lab tool call, measured around the dispatch",
+)
 
 # Deterministic fake telemetry. The scenarios exercise tracing, not a real backend, and
 # a fixed table keeps two runs comparable when verify diffs sensitive-data on against off.
@@ -70,6 +98,49 @@ INCIDENTS = {
     "cart": [],
     "payments": ["INC-4468 closed 03:10Z — transient DNS timeouts"],
 }
+
+# The cast. Which tools an agent holds is part of who it is, so it lives here rather than
+# in the scenarios — a researcher without lookup_metric is not a researcher.
+AGENT_SPECS = [
+    {
+        "name": "researcher",
+        "description": "Pulls metrics and incidents out of the telemetry store.",
+        "instructions": "You gather facts with the tools you have. Report numbers, never opinions. "
+                        "Answer in the language of the question.",
+        "tools": ["lookup_metric", "list_incidents"],
+    },
+    {
+        "name": "analyst",
+        "description": "Turns raw telemetry into a cause and an error-budget verdict.",
+        "instructions": "You explain what the numbers mean and compute the error budget with your "
+                        "tools. Answer in the language of the question.",
+        "tools": ["lookup_metric", "compute_slo"],
+    },
+    {
+        "name": "writer",
+        "description": "Writes the on-call summary.",
+        "instructions": "You write at most three sentences an on-call engineer can act on. "
+                        "Answer in the language of the question.",
+        "tools": [],
+    },
+    {
+        "name": "reviewer",
+        "description": "Checks the summary against the evidence.",
+        "instructions": "You check every claim against what the other agents found and say "
+                        "APPROVED when it holds up. Answer in the language of the question.",
+        "tools": [],
+    },
+]
+
+
+def specs_for(*names):
+    """The subset of the cast a scenario needs, in the order it names them.
+
+    Every agent in the list is created in the project and deleted afterwards, so a
+    scenario that asks for the whole cast pays for agents it never speaks to.
+    """
+    by_name = {spec["name"]: spec for spec in AGENT_SPECS}
+    return [by_name[name] for name in names]
 
 
 def add_tracing_arguments(parser):
@@ -114,8 +185,8 @@ def validate_tracing_arguments(parser, args):
     if "azure-monitor" in args.trace_export and not args.connection_string:
         parser.error("--trace-export azure-monitor needs --connection-string or "
                      "APPLICATIONINSIGHTS_CONNECTION_STRING. In the Foundry portal open "
-                     "Agents > Traces and select Connect to attach an Application Insights "
-                     "resource, then copy its connection string")
+                     "Observability > Traces and select Connect to attach an Application "
+                     "Insights resource, then copy its connection string")
 
 
 class TraceCapture:
@@ -228,15 +299,17 @@ def build_metric_readers(args):
     return memory_reader, readers
 
 
-def configure(args):
-    """Wire the global providers and return the capture the assertions read.
+def configure_providers(args):
+    """Wire the global tracer and meter providers and return the capture the assertions read.
 
-    OTEL_SERVICE_NAME is set before create_resource() because that is where the SDK
-    reads it from — passing --service-name has to end up in the same place an operator
-    setting the environment variable would.
+    Only the providers. Turning on the instrumentor is left to each scenario, because that
+    is the line worth seeing in a lab about tracing and because what it records depends on
+    the run's own --sensitive-data.
+
+    The providers have to exist before the first Foundry call either way — OpenTelemetry
+    starts with a no-op provider, and spans handed to it are gone with no error to say so.
     """
-    os.environ["OTEL_SERVICE_NAME"] = args.service_name
-    resource = create_resource()
+    resource = Resource.create({"service.name": args.service_name})
 
     memory_exporter, processors = build_span_exporters(args)
     tracer_provider = TracerProvider(
@@ -250,11 +323,11 @@ def configure(args):
     memory_reader, readers = build_metric_readers(args)
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
 
-    # Providers alone emit nothing — this is what turns on Agent Framework's own
-    # instrumentation code paths, and what decides whether content lands in attributes.
-    enable_instrumentation(enable_sensitive_data=args.sensitive_data)
-
     return TraceCapture(memory_exporter, memory_reader, args.service_name)
+
+
+def get_tracer():
+    return trace.get_tracer(__name__)
 
 
 def print_span_tree(spans):
@@ -308,130 +381,86 @@ def query_app_insights(workspace_id, trace_id, credential):
 
 
 def build_tools(inject_error):
-    """Fake telemetry tools, so a scenario costs one model call and no backend.
+    """The lab's tools, as the two halves the Responses API needs them in.
+
+    Returns the JSON schemas the model is shown, keyed by name, and the Python callables
+    that answer them, keyed by the same names. There is no decorator turning a signature
+    into a schema here on purpose: the schema is the contract with the model, and in a lab
+    about what ends up in a trace it should be something you can read rather than infer.
 
     inject_error is closed over rather than read from a global, which keeps two runs in
     the same process — verify does exactly that — from seeing each other's setting.
     """
 
-    @tool(approval_mode="never_require")
-    def lookup_metric(
-        service: Annotated[str, Field(description="service name, e.g. 'checkout'")],
-        metric: Annotated[str, Field(description="'p95_latency_ms', 'error_rate' or 'rps'")],
-    ) -> str:
-        """Read one metric for one service, with its value before the last release."""
+    def lookup_metric(service, metric):
         if inject_error and service == FAILING_SERVICE:
             raise RuntimeError(f"no telemetry is registered for service {service!r}")
         value = METRICS.get((service, metric))
         return value if value else f"no metric {metric!r} for service {service!r}"
 
-    @tool(approval_mode="never_require")
-    def list_incidents(
-        service: Annotated[str, Field(description="service name, e.g. 'checkout'")],
-    ) -> str:
-        """List today's incidents for a service, open and closed."""
+    def list_incidents(service):
         incidents = INCIDENTS.get(service)
         if incidents is None:
             return f"service {service!r} is not known"
         return "\n".join(incidents) if incidents else f"no incidents for {service}"
 
-    @tool(approval_mode="never_require")
-    def compute_slo(
-        good_events: Annotated[int, Field(description="requests that met the objective")],
-        total_events: Annotated[int, Field(description="requests served")],
-    ) -> str:
-        """Turn two counts into an availability figure and the error budget left against 99.9%."""
+    def compute_slo(good_events, total_events):
         if total_events <= 0:
             return "total_events must be positive"
         availability = good_events / total_events * 100
         budget_left = (availability - 99.9) / (100 - 99.9) * 100
         return f"availability {availability:.3f}%, error budget remaining {budget_left:.1f}%"
 
-    return [lookup_metric, list_incidents, compute_slo]
-
-
-def build_cast(args):
-    """Five agents on one chat client, returned by name so each scenario can pick the
-    subset its pattern needs.
-
-    A note that used to live here claimed reasoning models break every pattern that hands
-    one agent's tool call to the next, with a "Stateless replay cannot reconstruct
-    reasoning item(s)" exception. Running all five patterns end to end against
-    gpt-5.6-terra on agent-framework-core 1.13.0 / orchestrations 1.0.2 did not reproduce
-    it once, so the note is gone rather than left to be trusted. What actually blocked the
-    lab was HandoffBuilder's require_per_service_call_history_persistence check, handled
-    below. If the replay exception does come back, the framework's own answer to it is
-    agent_framework_orchestrations._orchestrator_helpers.clean_conversation_for_handoff,
-    which handoff and group chat already apply to every message they pass on; sequential
-    is the pattern with no such guard, and AgentExecutor(context_mode="custom",
-    context_filter=...) is where one would go.
-
-    Every agent gets an explicit id. Foundry correlates traces from agents it does not
-    host by gen_ai.agent.id on the create_agent span, so an agent without one is an
-    agent whose spans the portal cannot group.
-    """
-    client = FoundryChatClient(
-        project_endpoint=args.endpoint,
-        model=args.deployment,
-        credential=identity.get_credential(args),
-    )
-    tools = build_tools(args.inject_error)
-
-    def make(name, description, instructions, agent_tools=None):
-        """One agent, built the way every agent in this cast is built.
-
-        The id is explicit and derived from the name so the two never drift apart.
-
-        require_per_service_call_history_persistence is on for all five because
-        HandoffBuilder.build() refuses to build without it on every participant — a handoff
-        is a tool call that short-circuits the agent's turn, and the flag is what keeps the
-        local history consistent with the service across that short-circuit. It costs the
-        other four patterns nothing: the flag installs its middleware only when the agent
-        has a HistoryProvider, and none of these do.
-        """
-        return Agent(
-            client=client,
-            id=f"hol-obs-{name}",
-            name=name,
-            description=description,
-            instructions=instructions,
-            tools=agent_tools,
-            require_per_service_call_history_persistence=True,
-        )
-
-    return {
-        "researcher": make(
-            "researcher",
-            "Pulls metrics and incidents out of the telemetry store.",
-            "You gather facts with the tools you have. Report numbers, never opinions. "
-            "Answer in the language of the question.",
-            tools,
-        ),
-        "analyst": make(
-            "analyst",
-            "Turns raw telemetry into a cause and an error-budget verdict.",
-            "You explain what the numbers mean and compute the error budget. "
-            "Answer in the language of the question.",
-            tools,
-        ),
-        "writer": make(
-            "writer",
-            "Writes the on-call summary.",
-            "You write at most three sentences an on-call engineer can act on. "
-            "Answer in the language of the question.",
-        ),
-        "reviewer": make(
-            "reviewer",
-            "Checks the summary against the evidence.",
-            "You check every claim against what the other agents found and say "
-            "APPROVED when it holds up. Answer in the language of the question.",
-        ),
-        "manager": make(
-            "manager",
-            "Coordinates the team.",
-            "You coordinate the team to answer the task with as few turns as possible.",
-        ),
+    schemas = {
+        "lookup_metric": {
+            "type": "function",
+            "name": "lookup_metric",
+            "description": "Read one metric for one service, with its value before the last release.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string", "description": "service name, e.g. 'checkout'"},
+                    "metric": {"type": "string",
+                               "description": "'p95_latency_ms', 'error_rate' or 'rps'"},
+                },
+                "required": ["service", "metric"],
+                "additionalProperties": False,
+            },
+        },
+        "list_incidents": {
+            "type": "function",
+            "name": "list_incidents",
+            "description": "List today's incidents for a service, open and closed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string", "description": "service name, e.g. 'checkout'"},
+                },
+                "required": ["service"],
+                "additionalProperties": False,
+            },
+        },
+        "compute_slo": {
+            "type": "function",
+            "name": "compute_slo",
+            "description": "Turn two counts into an availability figure and the error budget "
+                           "left against 99.9%.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "good_events": {"type": "integer",
+                                    "description": "requests that met the objective"},
+                    "total_events": {"type": "integer", "description": "requests served"},
+                },
+                "required": ["good_events", "total_events"],
+                "additionalProperties": False,
+            },
+        },
     }
+
+    return schemas, {"lookup_metric": lookup_metric,
+                     "list_incidents": list_incidents,
+                     "compute_slo": compute_slo}
 
 
 def build_task(args):
@@ -442,72 +471,172 @@ def build_task(args):
             f"{FAILING_SERVICE} and report what happened when you did.")
 
 
-def record_agent_creation(cast):
-    """Open one create_agent span per agent in the cast.
+@contextlib.contextmanager
+def agent_versions(project, specs, model, schemas):
+    """Create one Foundry agent per spec, hand them back by name, delete them on the way out.
 
-    Agent Framework reserves this operation name but never opens the span for an agent you
-    constructed yourself — it has nothing to report about a creation it did not perform.
-    The span is still the one the convention puts gen_ai.agent.id on, and that id is how
-    Foundry groups the traces of agents it does not host, so a run without it is a run the
-    portal cannot attribute to an agent.
+    This is where the create_agent spans come from — the instrumentor traces the create
+    call, and gen_ai.agent.id on that span is how Foundry groups everything the agent
+    later does. An agent that is never created is an agent the portal has no row for.
 
-    It is emitted here rather than in build_cast because build_cast runs before the root
-    span opens. A create_agent span started there would land in a trace of its own, which
-    is the opposite of what an id meant for correlation is for.
+    Tools go on the agent definition rather than on the call. The service rejects a
+    responses.create that carries both an agent reference and a tools list, so the agent
+    is the only place a tool can be declared.
+
+    Deleting is in a finally block because a failed run leaves the versions behind
+    otherwise, and the next run would stack another version on top of them.
+    """
+    created = {}
+    try:
+        for spec in specs:
+            created[spec["name"]] = project.agents.create_version(
+                agent_name=f"{AGENT_PREFIX}{spec['name']}",
+                definition=PromptAgentDefinition(
+                    model=model,
+                    instructions=spec["instructions"],
+                    tools=[schemas[name] for name in spec["tools"]] or None,
+                ),
+            )
+        yield created
+    finally:
+        for name, version in created.items():
+            try:
+                project.agents.delete_version(agent_name=version.name,
+                                              agent_version=version.version, force=True)
+            except Exception as error:  # noqa: BLE001 - one bad delete must not skip the rest
+                print(f"  could not delete agent {name} version {version.version}: {error}")
+
+
+def agent_reference(agent):
+    """How a responses.create says which agent should answer.
+
+    The name in here is also what the instrumentor puts in the span name and in
+    gen_ai.agent.name, so a run with no reference produces spans called plain "responses"
+    that no one can attribute to an agent.
+    """
+    return {"agent_reference": {"type": "agent_reference", "name": agent.name, "id": agent.id}}
+
+
+def run_tool_calls(response, agent, handlers, sensitive):
+    """Answer every function call in one response, tracing each one. [] when the agent is done.
+
+    The execute_tool span is ours because the tool ran here, not at the service — the
+    instrumentor can see the model ask for the call and see the answer go back up, but the
+    seconds in between belong to this process and nothing else would record them.
+
+    These spans are siblings of the invoke_agent spans rather than children, because the
+    model call that asked for the tool has already returned by the time the tool runs.
+    That is the truth of the loop, but it leaves the tree unable to say whose tool this
+    was — hence gen_ai.agent.name, which puts the answer on the span itself.
+    """
+    outputs = []
+    for item in response.output:
+        if item.type != "function_call":
+            continue
+
+        arguments = json.loads(item.arguments)
+        with get_tracer().start_as_current_span(f"execute_tool {item.name}",
+                                                kind=SpanKind.INTERNAL) as span:
+            span.set_attribute("gen_ai.operation.name", "execute_tool")
+            span.set_attribute("gen_ai.tool.name", item.name)
+            span.set_attribute("gen_ai.tool.call.id", item.call_id)
+            span.set_attribute("gen_ai.agent.name", agent.name)
+            span.set_attribute("gen_ai.agent.id", agent.id)
+            if sensitive:
+                span.set_attribute("tool.call.arguments", json.dumps(arguments, ensure_ascii=False))
+
+            started = time.perf_counter()
+            try:
+                result = handlers[item.name](**arguments)
+            except Exception as error:  # noqa: BLE001 - the model gets to see and correct it
+                span.set_status(Status(StatusCode.ERROR, str(error)))
+                span.set_attribute("error.type", type(error).__name__)
+                span.record_exception(error)
+                result = f"the tool failed: {error}"
+            TOOL_DURATION.record(time.perf_counter() - started,
+                                 {"gen_ai.tool.name": item.name})
+
+            if sensitive:
+                span.set_attribute("tool.call.results", result)
+
+        outputs.append({"type": "function_call_output", "call_id": item.call_id,
+                        "output": result})
+    return outputs
+
+
+def run_turn(client, agent, conversation_id, prompt, handlers, sensitive, stop_on=None):
+    """One agent's turn: ask, answer whatever tools it asked for, ask again, until it stops.
+
+    Returns what the agent said and, when stop_on names a tool, the arguments it passed to
+    that tool. The whole loop is a dozen lines because that is all a turn is. Everything a
+    framework would have hidden — that a tool call is just another response item, that the
+    answer goes back as ordinary input, that the conversation is what carries the history —
+    is visible here, and each pass through the loop is one more agent span in the trace.
+
+    stop_on exists for handoff, where one tool does not answer a question but ends the
+    turn. It is still dispatched like any other tool, because leaving a function call
+    unanswered in a conversation is how you get the next agent's request rejected.
+    """
+    response = client.responses.create(conversation=conversation_id, input=prompt,
+                                       extra_body=agent_reference(agent))
+    for _ in range(MAX_TOOL_ROUNDS):
+        outputs = run_tool_calls(response, agent, handlers, sensitive)
+        control = next((json.loads(item.arguments) for item in response.output
+                        if item.type == "function_call" and item.name == stop_on), None)
+        if not outputs:
+            return response.output_text, control
+
+        response = client.responses.create(conversation=conversation_id, input=outputs,
+                                           extra_body=agent_reference(agent))
+        if control:
+            return response.output_text, control
+    raise SystemExit(f"{agent.name} kept calling tools past {MAX_TOOL_ROUNDS} rounds")
+
+
+def handoff(source, target, reason):
+    """Record one agent passing the task to another.
+
+    No SDK emits this. The service sees two unrelated calls; only this code knows the
+    second happened because of the first, and the multi-agent semantic conventions name
+    exactly this span so that knowledge does not stay in the code.
+    https://learn.microsoft.com/en-us/azure/foundry/observability/concepts/trace-agent-concept
     """
     tracer = get_tracer()
-    for agent in cast.values():
-        with tracer.start_as_current_span(f"create_agent {agent.name}", kind=SpanKind.CLIENT) as span:
-            span.set_attribute("gen_ai.operation.name", "create_agent")
-            span.set_attribute("gen_ai.agent.id", agent.id)
-            span.set_attribute("gen_ai.agent.name", agent.name)
-            if agent.description:
-                span.set_attribute("gen_ai.agent.description", agent.description)
+    with tracer.start_as_current_span("agent_to_agent_interaction") as span:
+        span.set_attribute("source.agent.name", source)
+        span.set_attribute("target.agent.name", target)
+        span.set_attribute("handoff.reason", reason)
 
 
-def run_scenario(args, run, title, cast):
-    """The shell every scenario shares: configure, open a root span, run, report.
+def record_state(conversation_id, characters):
+    """The conversation as the state the next agent inherits."""
+    with get_tracer().start_as_current_span("agent.state.management") as span:
+        span.set_attribute("memory.type", "short_term")
+        span.set_attribute("gen_ai.conversation.id", conversation_id)
+        span.set_attribute("memory.characters", characters)
 
-    The root span exists so a whole multi-agent run is one trace with one id. Without it
-    each orchestration entry point would start its own trace and the portal would show
-    the run as unrelated fragments.
 
-    The cast is passed in only so its agents can be announced inside that root span.
+def announce(args, root):
+    """Say which trace this run is, before anything is spent on it.
+
+    Printed rather than logged because the trace id is the one thing you need in your hand
+    to go find this run in the portal afterwards.
     """
-    capture = configure(args)
-
-    with get_tracer().start_as_current_span(title, kind=SpanKind.CLIENT) as root:
-        trace_id = format_trace_id(root.get_span_context().trace_id)
-        print(f"trace {trace_id}")
-        print(f"  service {args.service_name}, "
-              f"sensitive data {'on' if args.sensitive_data else 'off'}, "
-              f"export {'+'.join(args.trace_export) or 'memory'}")
-        record_agent_creation(cast)
-        asyncio.run(run(capture))
-
-    capture.flush()
-    print_span_tree(capture.spans())
-
-    if args.dump_spans:
-        print(f"  wrote {capture.dump(args.dump_spans)}")
+    trace_id = format_trace_id(root.get_span_context().trace_id)
+    print(f"trace {trace_id}")
+    print(f"  service {args.service_name}, "
+          f"sensitive data {'on' if args.sensitive_data else 'off'}, "
+          f"export {'+'.join(args.trace_export) or 'memory'}")
     return trace_id
 
 
-async def stream(workflow, task):
-    """Run a workflow and print each participant's turn as it arrives.
+def report(args, capture):
+    """Flush both pipelines, print the run as the shape it had, write the dump if asked.
 
-    Streaming rather than awaiting the result, because a scenario about observability
-    should let you watch the agents hand work to each other rather than show a summary
-    once it is all over.
+    Called after the root span closes, never inside it — a span still open is a span the
+    exporters have not been handed, and the tree would be missing its own root.
     """
-    last_author = None
-    events = workflow.run(task, stream=True)
-    async for event in events:
-        if event.type in ("intermediate", "output") and isinstance(event.data, AgentResponseUpdate):
-            author = event.data.author_name or event.executor_id
-            if author != last_author:
-                print(f"\n  [{author}]", end=" ", flush=True)
-                last_author = author
-            print(event.data.text or "", end="", flush=True)
-    print()
-    return events
+    capture.flush()
+    print_span_tree(capture.spans())
+    if args.dump_spans:
+        print(f"  wrote {capture.dump(args.dump_spans)}")

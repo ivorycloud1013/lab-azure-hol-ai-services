@@ -19,8 +19,6 @@ SCENARIOS = {
     "sequential": "hol-foundry-observability-sequential.py",
     "concurrent": "hol-foundry-observability-concurrent.py",
     "handoff": "hol-foundry-observability-handoff.py",
-    "groupchat": "hol-foundry-observability-groupchat.py",
-    "magentic": "hol-foundry-observability-magentic.py",
     "semconv": "hol-foundry-observability-semconv.py",
 }
 
@@ -32,28 +30,32 @@ EXTRA_PASSES = {
     "error": ("sequential", ["--inject-error"]),
 }
 
-BUILDER_SCENARIOS = ["sequential", "concurrent", "handoff", "groupchat", "magentic"]
+ALL_SCENARIOS = list(SCENARIOS)
 
-# Attribute keys that only appear when content recording is on. Checked as a count rather
-# than by name: the exact key set moves with the semantic conventions, but "more content
-# with it on than off" is what the flag actually promises.
-CONTENT_MARKERS = ("gen_ai.input", "gen_ai.output", "gen_ai.prompt", "gen_ai.completion",
-                   "gen_ai.request.instructions", "gen_ai.system_instructions",
+# Patterns that route work between agents, and so should carry the handoff vocabulary.
+ROUTING_SCENARIOS = ["sequential", "concurrent", "handoff", "semconv"]
+
+# Attribute keys that carry model content. Their presence is not the evidence — the
+# instrumentor writes the message shape either way, with the text stripped out when
+# recording is off — so the check below weighs them instead of counting them.
+CONTENT_MARKERS = ("gen_ai.input", "gen_ai.output", "gen_ai.system_instructions",
                    "tool.call.arguments", "tool.call.results")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Run every tracing scenario in this lab and assert what each one should "
-                    "have emitted — agent spans, workflow spans, the multi-agent semantic "
-                    "conventions, GenAI metrics, content recording and the failure path.",
+                    "have emitted — the spans azure-ai-projects emits, the multi-agent "
+                    "semantic conventions this lab emits itself, the GenAI metrics, content "
+                    "recording and the failure path.",
         epilog="Each scenario runs as its own process with --dump-spans, and the assertions "
                "read the dumps. Exit code is 0 only when nothing failed. Every scenario calls "
-               "the model, so a full run costs real tokens — narrow it with --scenario while "
-               "you are iterating. --check-app-insights adds the one assertion the in-process "
-               "pipeline cannot make, that the traces actually reached Application Insights; "
-               "it needs the project connected to an Application Insights resource (Foundry "
-               "portal, Agents > Traces > Connect) and the Log Analytics Reader role on it. "
+               "the model and creates real agents in the project, so a full run costs real "
+               "tokens — narrow it with --scenario while you are iterating. "
+               "--check-app-insights adds the one assertion the in-process pipeline cannot "
+               "make, that the traces actually reached Application Insights; it needs the "
+               "project connected to an Application Insights resource (Foundry portal, "
+               "Observability > Traces > Connect) and the Log Analytics Reader role on it. "
                "Traces take 2-5 minutes to land, so that check polls.",
     )
     parser.add_argument("--endpoint",
@@ -85,7 +87,7 @@ def parse_args():
     if not args.endpoint:
         parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
     if args.auth in ("api-key", "access-token"):
-        parser.error(f"--auth {args.auth} is not supported by the agent framework, use another method")
+        parser.error(f"--auth {args.auth} is not supported by this SDK path, use another method")
     if args.check_app_insights and not args.workspace_id:
         parser.error("--check-app-insights needs --workspace-id or LOG_ANALYTICS_WORKSPACE_ID")
     if args.check_app_insights and "azure-monitor" not in args.trace_export:
@@ -93,7 +95,7 @@ def parse_args():
                      "nothing was sent for it to find")
     observability.validate_tracing_arguments(parser, args)
     if not args.scenario:
-        args.scenario = list(SCENARIOS) + list(EXTRA_PASSES)
+        args.scenario = ALL_SCENARIOS + list(EXTRA_PASSES)
     return args
 
 
@@ -115,7 +117,12 @@ def build_command(args, script, dump_path, extra):
 
 
 def run_pass(args, name, dump_dir):
-    """Run one scenario and load what it recorded, or None when it could not run."""
+    """Run one scenario and load what it recorded, or None when it could not run.
+
+    The passes run one after another rather than together on purpose: the agents are named
+    resources in the project, and two passes at once would be two runs creating and
+    deleting versions of the same agent names.
+    """
     scenario, extra = EXTRA_PASSES.get(name, (name, []))
     dump_path = os.path.join(dump_dir, f"{name}.json")
     command = build_command(args, SCENARIOS[scenario], dump_path, extra)
@@ -185,15 +192,37 @@ def has_metrics(names):
     return check
 
 
-def has_links(dumps, scope):
-    linked = [span for span in spans_of(dumps, scope) if span["links"]]
-    return bool(linked), "no span was linked to the message.send that caused it"
+def agents_were_created(dumps, scope):
+    """Every agent a run spoke to should have a create_agent span naming it.
+
+    An invoke_agent with no matching create_agent is an agent the portal has no row for,
+    which is the one failure that leaves a trace looking complete and still unusable.
+    """
+    spans = spans_of(dumps, scope)
+    created = {span["attributes"].get("gen_ai.agent.name")
+               for span in named(spans, "create_agent")}
+    invoked = {span["attributes"].get("gen_ai.agent.name")
+               for span in named(spans, "invoke_agent")} - {None}
+    missing = sorted(invoked - created)
+    return not missing, f"invoked without a create_agent span: {', '.join(missing)}"
 
 
-def buffered_delivery(dumps, scope):
-    statuses = {span["attributes"].get("edge_group.delivery_status")
-                for span in named(spans_of(dumps, scope), "edge_group.process")}
-    return "buffered" in statuses, f"fan-in never buffered, saw {sorted(s for s in statuses if s)}"
+def agents_were_deleted(dumps, scope):
+    """As many delete_version spans as create_agent spans.
+
+    Agents are named resources in the project. A run that creates them and leaves them
+    behind is a run that changed the project, and the next run stacks another version on
+    top of what this one abandoned.
+    """
+    for name in scope:
+        if name not in dumps:
+            continue
+        spans = dumps[name]["spans"]
+        created = len(named(spans, "create_agent"))
+        deleted = len(named(spans, "AgentsOperations.delete_version"))
+        if created != deleted:
+            return False, f"{name} created {created} agents and deleted {deleted}"
+    return True, ""
 
 
 def one_trace_per_run(dumps, scope):
@@ -228,80 +257,71 @@ def error_recorded(dumps, scope):
 def content_recording_differs(dumps, scope):
     """Content recording is a switch, so the evidence is a difference, not a presence.
 
-    Counting marker attributes rather than naming one is deliberate: which key holds the
-    prompt moves with the semantic conventions, but the flag's promise — more user content
-    with it on than off — does not.
+    Weighed by character count rather than by key: the instrumentor writes
+    gen_ai.input.messages either way, and with recording off it writes the roles and the
+    part types with the text taken out. Counting keys would score that identical to a
+    recorded run, which is exactly the failure this check exists to catch.
     """
-    def markers(name):
-        return sum(1 for key in attribute_keys(spans_of(dumps, [name]))
+    def weight(name):
+        return sum(len(str(value))
+                   for span in spans_of(dumps, [name])
+                   for key, value in span["attributes"].items()
                    if key.startswith(CONTENT_MARKERS))
 
     if "sensitive" not in dumps or "sequential" not in dumps:
         return False, "needs both the sequential and sensitive passes"
-    on, off = markers("sensitive"), markers("sequential")
-    return on > off, f"{on} content attributes with recording on, {off} with it off"
+    on, off = weight("sensitive"), weight("sequential")
+    return on > off, f"{on} characters of content with recording on, {off} with it off"
 
 
 # group, label, the passes it needs, and the check itself. A check whose passes were not
 # run reports SKIP, so narrowing with --scenario never looks like a clean sheet.
 CHECKS = [
-    ("A agent", "invoke_agent span", BUILDER_SCENARIOS, has_span("invoke_agent")),
-    ("A agent", "chat span", BUILDER_SCENARIOS, has_span("chat")),
-    ("A agent", "execute_tool span", BUILDER_SCENARIOS, has_span("execute_tool")),
-    ("A agent", "create_agent span", BUILDER_SCENARIOS, has_span("create_agent")),
-    ("A agent", "agent identity attributes", BUILDER_SCENARIOS,
+    ("A what the SDK traces", "create_agent span", ALL_SCENARIOS, has_span("create_agent")),
+    ("A what the SDK traces", "invoke_agent span", ALL_SCENARIOS, has_span("invoke_agent")),
+    ("A what the SDK traces", "create_conversation span", ALL_SCENARIOS,
+     has_span("create_conversation")),
+    ("A what the SDK traces", "agent identity attributes", ALL_SCENARIOS,
      has_attributes("invoke_agent", ["gen_ai.operation.name", "gen_ai.agent.name", "gen_ai.agent.id"])),
-    # gen_ai.provider.name, not gen_ai.system — the GenAI conventions renamed it and the
-    # framework followed. Asserting the old name asserts that nothing moved, which is the
-    # one thing a convention this young will not promise.
-    ("A agent", "model call attributes", BUILDER_SCENARIOS,
-     has_attributes("chat", ["gen_ai.provider.name", "gen_ai.response.id"])),
-    ("A agent", "token usage attributes", BUILDER_SCENARIOS,
-     has_attributes("chat", ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"])),
+    ("A what the SDK traces", "model call attributes", ALL_SCENARIOS,
+     has_attributes("invoke_agent", ["gen_ai.provider.name", "gen_ai.response.id",
+                                     "gen_ai.response.model", "gen_ai.conversation.id"])),
+    ("A what the SDK traces", "token usage attributes", ALL_SCENARIOS,
+     has_attributes("invoke_agent", ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"])),
+    ("A what the SDK traces", "every invoked agent was created", ALL_SCENARIOS, agents_were_created),
+    ("A what the SDK traces", "every created agent was deleted", ALL_SCENARIOS, agents_were_deleted),
 
-    ("B workflow", "workflow.build span", BUILDER_SCENARIOS, has_span("workflow.build")),
-    ("B workflow", "workflow.run span", BUILDER_SCENARIOS, has_span("workflow.run")),
-    ("B workflow", "executor.process span", BUILDER_SCENARIOS, has_span("executor.process")),
-    ("B workflow", "edge_group.process span", BUILDER_SCENARIOS, has_span("edge_group.process")),
-    ("B workflow", "message.send span", BUILDER_SCENARIOS, has_span("message.send")),
-    ("B workflow", "workflow.build attributes", BUILDER_SCENARIOS,
-     has_attributes("workflow.build", ["workflow.id", "workflow.definition", "workflow_builder.name"])),
-    ("B workflow", "workflow.run attributes", BUILDER_SCENARIOS,
-     has_attributes("workflow.run", ["workflow.id", "workflow.name"])),
-    ("B workflow", "executor attributes", BUILDER_SCENARIOS,
-     has_attributes("executor.process", ["executor.id", "executor.type", "message.type"])),
-    ("B workflow", "edge group attributes", BUILDER_SCENARIOS,
-     has_attributes("edge_group.process",
-                    ["edge_group.type", "edge_group.id", "edge_group.delivered",
-                     "edge_group.delivery_status"])),
-    ("B workflow", "build lifecycle events", BUILDER_SCENARIOS,
-     has_events(["build.started", "build.validation_completed", "build.completed"])),
-    ("B workflow", "run lifecycle events", BUILDER_SCENARIOS,
-     has_events(["workflow.started", "workflow.completed"])),
-    ("B workflow", "causal span links", BUILDER_SCENARIOS, has_links),
-    ("B workflow", "fan-in buffers messages", ["concurrent"], buffered_delivery),
-
-    ("C semconv", "execute_task span", ["semconv"], has_span("execute_task")),
-    ("C semconv", "agent_planning span", ["semconv"], has_span("agent_planning")),
-    ("C semconv", "agent_orchestration span", ["semconv"], has_span("agent_orchestration")),
-    ("C semconv", "agent_to_agent_interaction span", ["semconv"], has_span("agent_to_agent_interaction")),
-    ("C semconv", "agent.state.management span", ["semconv"], has_span("agent.state.management")),
-    ("C semconv", "tool_definitions and llm_spans", ["semconv"],
+    ("B what the lab traces", "execute_tool span", ALL_SCENARIOS, has_span("execute_tool")),
+    ("B what the lab traces", "tool call attributes", ALL_SCENARIOS,
+     has_attributes("execute_tool", ["gen_ai.operation.name", "gen_ai.tool.name",
+                                     "gen_ai.agent.name"])),
+    ("B what the lab traces", "agent_to_agent_interaction span", ROUTING_SCENARIOS,
+     has_span("agent_to_agent_interaction")),
+    ("B what the lab traces", "handoff attributes", ROUTING_SCENARIOS,
+     has_attributes("agent_to_agent_interaction",
+                    ["source.agent.name", "target.agent.name", "handoff.reason"])),
+    ("B what the lab traces", "agent.state.management span", ROUTING_SCENARIOS,
+     has_span("agent.state.management")),
+    ("B what the lab traces", "execute_task span", ["semconv"], has_span("execute_task")),
+    ("B what the lab traces", "agent_planning span", ["semconv"], has_span("agent_planning")),
+    ("B what the lab traces", "agent_orchestration span", ["semconv"], has_span("agent_orchestration")),
+    ("B what the lab traces", "tool_definitions and llm_spans", ["semconv"],
      has_attributes("invoke_agent", ["tool_definitions", "llm_spans"])),
-    ("C semconv", "tool call arguments and results", ["semconv"],
+    ("B what the lab traces", "tool call arguments and results", ["semconv"],
      has_attributes("execute_tool", ["tool.call.arguments", "tool.call.results"])),
-    ("C semconv", "Evaluation event", ["semconv"], has_events(["Evaluation"])),
+    ("B what the lab traces", "Evaluation event", ["semconv"], has_events(["Evaluation"])),
 
-    ("D metrics", "operation duration", BUILDER_SCENARIOS,
+    ("C metrics", "operation duration", ALL_SCENARIOS,
      has_metrics(["gen_ai.client.operation.duration"])),
-    ("D metrics", "token usage", BUILDER_SCENARIOS, has_metrics(["gen_ai.client.token.usage"])),
-    ("D metrics", "function invocation duration", BUILDER_SCENARIOS,
-     has_metrics(["agent_framework.function.invocation.duration"])),
+    ("C metrics", "token usage", ALL_SCENARIOS, has_metrics(["gen_ai.client.token.usage"])),
+    ("C metrics", "tool invocation duration", ALL_SCENARIOS,
+     has_metrics(["hol.tool.invocation.duration"])),
 
-    ("E run", "one trace per run", list(SCENARIOS), one_trace_per_run),
-    ("E run", "service.name on every span", list(SCENARIOS), service_name_on_spans),
-    ("E run", "failure recorded as ERROR", ["error"], error_recorded),
-    ("E run", "content recording changes output", ["sequential", "sensitive"], content_recording_differs),
+    ("D the run", "one trace per run", ALL_SCENARIOS, one_trace_per_run),
+    ("D the run", "service.name on every span", ALL_SCENARIOS, service_name_on_spans),
+    ("D the run", "failure recorded as ERROR", ["error"], error_recorded),
+    ("D the run", "content recording changes output", ["sequential", "sensitive"],
+     content_recording_differs),
 ]
 
 
@@ -338,7 +358,7 @@ def check_app_insights(args, dumps):
         print("  FAIL app insights — no run produced a trace id to look for")
         return False
 
-    print(f"\nF backend\n  querying workspace {args.workspace_id} for trace {trace_ids[0]}")
+    print(f"\nE backend\n  querying workspace {args.workspace_id} for trace {trace_ids[0]}")
     found = observability.query_app_insights(args.workspace_id, trace_ids[0],
                                              identity.get_credential(args))
     print(f"  {'PASS' if found else 'FAIL'} traces reached Application Insights"

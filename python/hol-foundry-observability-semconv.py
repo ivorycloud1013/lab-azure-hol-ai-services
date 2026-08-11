@@ -4,21 +4,20 @@ import argparse
 import json
 import os
 
-from agent_framework.observability import get_tracer
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.telemetry import AIProjectInstrumentor
 from opentelemetry.trace import SpanKind
 
 import identity
 import observability
 
 # The spans, attributes and events Microsoft and Cisco Outshift added to the OpenTelemetry
-# GenAI conventions for multi-agent systems. Agent Framework emits invoke_agent, chat and
-# execute_tool on its own; everything in this table is the coordination layer above them,
-# which no framework can emit for you because only your code knows where a task was
-# decomposed or where one agent handed context to another.
+# GenAI conventions for multi-agent systems. AIProjectInstrumentor emits create_agent and
+# invoke_agent on its own; everything in this table is the coordination layer above them,
+# which no SDK can emit for you because only your code knows where a task was decomposed
+# or where one agent handed context to another.
 # https://learn.microsoft.com/en-us/azure/foundry/observability/concepts/trace-agent-concept
 SPAN_EXECUTE_TASK = "execute_task"
-SPAN_A2A = "agent_to_agent_interaction"
-SPAN_STATE = "agent.state.management"
 SPAN_PLANNING = "agent_planning"
 SPAN_ORCHESTRATION = "agent_orchestration"
 SPAN_INVOKE_AGENT = "invoke_agent"
@@ -39,13 +38,13 @@ def parse_args():
                     "collaboration on Foundry — execute_task, agent_planning, "
                     "agent_orchestration, agent_to_agent_interaction, agent.state.management, "
                     "and the Evaluation event.",
-        epilog="The other scenarios in this lab trace what Agent Framework emits by itself. "
-               "This one traces what it cannot: the coordination layer. The orchestration here "
-               "is hand-rolled rather than built with HandoffBuilder, because you can only "
-               "annotate a handoff you own — a builder hides the moment one agent's context "
-               "becomes another's, which is exactly the moment the convention asks you to "
-               "record. Run it, then look for these span names in the Foundry portal under "
-               "Observability > Traces alongside the framework's own.",
+        epilog="The other scenarios trace what the SDK emits by itself and add the handful of "
+               "coordination spans their pattern needs. This one exists to show the whole "
+               "vocabulary in one trace, including the two spans the others have no use for: "
+               "agent_planning, which records the decomposition before any agent runs, and "
+               "agent_orchestration, which is the bracket around the turns that carries out "
+               "the plan. Run it, then look for these span names in the Foundry portal under "
+               "Observability > Traces alongside the SDK's own.",
     )
     parser.add_argument("--endpoint",
                         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT") or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
@@ -64,61 +63,54 @@ def parse_args():
     if not args.endpoint:
         parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
     if args.auth in ("api-key", "access-token"):
-        parser.error(f"--auth {args.auth} is not supported by the agent framework, use another method")
+        parser.error(f"--auth {args.auth} is not supported by this SDK path, use another method")
     observability.validate_tracing_arguments(parser, args)
     return args
 
 
-def describe_tools(agent):
-    """Serialise the agent's tools for the tool_definitions attribute.
+def describe_tools(spec, schemas):
+    """Serialise an agent's tools for the tool_definitions attribute.
 
     An attribute value has to be a primitive or a sequence of them, so the definitions go
     in as JSON. Names alone would not survive the round trip to a query: two agents can
     hold the same tool with different descriptions, and the description is the part that
     changed the model's behaviour.
     """
-    definitions = []
-    for entry in getattr(agent, "tools", None) or []:
-        definitions.append({
-            "name": getattr(entry, "name", None) or getattr(entry, "__name__", str(entry)),
-            "description": (getattr(entry, "description", None) or "").strip(),
-        })
-    return json.dumps(definitions, ensure_ascii=False)
+    return json.dumps([{"name": name, "description": schemas[name]["description"]}
+                       for name in spec["tools"]], ensure_ascii=False)
 
 
-def span_id_of(span):
-    return f"{span.get_span_context().span_id:016x}"
-
-
-async def run_turn(tracer, agent, prompt, conversation):
+def annotated_turn(tracer, client, agent, spec, schemas, conversation_id, prompt, handlers, sensitive):
     """One agent's turn, wrapped in the invoke_agent span the convention hangs attributes on.
 
-    Agent Framework opens its own invoke_agent span underneath this one. Two spans of the
+    The instrumentor opens its own invoke_agent span underneath this one. Two spans of the
     same name nested looks redundant until you need somewhere to put tool_definitions and
-    llm_spans — those describe the call site's intent, and the framework's span describes
-    the call, so they are not the same span even though they share a name.
+    llm_spans — those describe the call site's intent, and the SDK's span describes the
+    call, so they are not the same span even though they share a name.
     """
-    with tracer.start_as_current_span(f"{SPAN_INVOKE_AGENT} {agent.name}", kind=SpanKind.CLIENT) as span:
+    with tracer.start_as_current_span(f"{SPAN_INVOKE_AGENT} {spec['name']}",
+                                      kind=SpanKind.CLIENT) as span:
         span.set_attribute("gen_ai.operation.name", SPAN_INVOKE_AGENT)
         span.set_attribute("gen_ai.agent.id", agent.id)
         span.set_attribute("gen_ai.agent.name", agent.name)
-        span.set_attribute("tool_definitions", describe_tools(agent))
+        span.set_attribute("tool_definitions", describe_tools(spec, schemas))
 
-        response = await agent.run(f"{conversation}\n\n{prompt}" if conversation else prompt)
-        text = response.text
+        text, _ = observability.run_turn(client, agent, conversation_id, prompt,
+                                         handlers, sensitive)
 
-        # The model calls this agent made, by span id, so a reader can jump from the
-        # coordination layer straight to the completions that produced this turn.
-        span.set_attribute("llm_spans", [span_id_of(span)])
+        # The model calls this turn made, by span id, so a reader can jump from the
+        # coordination layer straight to the completions that produced it.
+        span.set_attribute("llm_spans", [f"{span.get_span_context().span_id:016x}"])
         return text
 
 
 def record_tool_call(tracer, name, arguments, result):
     """An execute_tool span carrying the call's arguments and its result.
 
-    The framework already traces the tools the model chose. This records a tool the
-    orchestration called on its own behalf — the convention wants both, and only the
-    second one is ever missing from a trace.
+    The other scenarios trace the tools the model chose, and they redact the arguments
+    unless --sensitive-data is set, because those carry whatever the user asked. This
+    records a tool the orchestration called on its own behalf, on numbers this file made
+    up, so there is nothing to redact and the convention gets to be shown in full.
     """
     with tracer.start_as_current_span(f"{SPAN_EXECUTE_TOOL} {name}", kind=SpanKind.INTERNAL) as span:
         span.set_attribute("gen_ai.operation.name", SPAN_EXECUTE_TOOL)
@@ -127,68 +119,80 @@ def record_tool_call(tracer, name, arguments, result):
         span.set_attribute("tool.call.results", str(result))
 
 
-async def collaborate(cast, task, tracer):
-    """Two agents, one task, every coordination point named as the convention names it."""
-    with tracer.start_as_current_span(SPAN_EXECUTE_TASK, kind=SpanKind.CLIENT) as task_span:
-        task_span.set_attribute("gen_ai.operation.name", SPAN_EXECUTE_TASK)
-        task_span.set_attribute("workflow.name", "hol-obs-semconv")
-        task_span.set_attribute("task.description", task)
-
-        with tracer.start_as_current_span(SPAN_PLANNING) as planning:
-            planning.set_attribute("plan.steps", [f"{name}: {prompt}" for name, prompt in PLAN])
-            print(f"  planned {len(PLAN)} steps")
-
-        # The task rides on the first step only. Repeating it every turn would cost input
-        # tokens to tell an agent something the conversation already carries.
-        conversation = f"task: {task}"
-        previous = None
-
-        with tracer.start_as_current_span(SPAN_ORCHESTRATION) as orchestration:
-            orchestration.set_attribute("participants", [name for name, _ in PLAN])
-
-            for name, prompt in PLAN:
-                if previous:
-                    # The handoff itself. Everything the next agent knows, it knows because
-                    # of what happens inside this span.
-                    with tracer.start_as_current_span(SPAN_A2A) as handoff:
-                        handoff.set_attribute("source.agent.name", previous)
-                        handoff.set_attribute("target.agent.name", name)
-                        handoff.set_attribute("handoff.reason", "the next step needs the previous findings")
-
-                    with tracer.start_as_current_span(SPAN_STATE) as state:
-                        state.set_attribute("memory.type", "short_term")
-                        state.set_attribute("memory.characters", len(conversation))
-
-                print(f"\n  [{name}]", end=" ", flush=True)
-                text = await run_turn(tracer, cast[name], prompt, conversation)
-                print(text)
-                conversation = f"{conversation}\n\n{name}: {text}".strip()
-                previous = name
-
-        record_tool_call(tracer, "compute_slo",
-                         {"good_events": 9_973, "total_events": 10_000},
-                         "availability 99.730%, error budget remaining -170.0%")
-
-        # The convention's Evaluation event, which is how a quality judgement is attached to
-        # the run that produced it rather than stored somewhere that has to be joined later.
-        grounded = "checkout" in conversation.lower()
-        task_span.add_event(EVENT_EVALUATION, {
-            "name": "groundedness",
-            "error.type": "" if grounded else "ungrounded_response",
-            "label": "pass" if grounded else "fail",
-        })
-        print(f"\n  evaluation groundedness {'pass' if grounded else 'fail'}")
-
-
 def main():
     args = parse_args()
-    cast = observability.build_cast(args)
     task = observability.build_task(args)
+    schemas, handlers = observability.build_tools(args.inject_error)
+    specs = {spec["name"]: spec for spec in observability.specs_for(*[name for name, _ in PLAN])}
 
-    async def run(_capture):
-        await collaborate(cast, task, get_tracer())
+    capture = observability.configure_providers(args)
+    tracer = observability.get_tracer()
 
-    observability.run_scenario(args, run, "Scenario: multi-agent semantic conventions", cast)
+    os.environ["AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING"] = "true"
+    AIProjectInstrumentor().instrument(enable_content_recording=args.sensitive_data)
+
+    with (
+        tracer.start_as_current_span("Scenario: multi-agent semantic conventions",
+                                     kind=SpanKind.CLIENT) as root,
+        identity.get_credential(args) as credential,
+        AIProjectClient(endpoint=args.endpoint, credential=credential, allow_preview=True) as project,
+        observability.agent_versions(project, list(specs.values()), args.deployment, schemas) as agents,
+        project.get_openai_client() as client,
+    ):
+        observability.announce(args, root)
+
+        with tracer.start_as_current_span(SPAN_EXECUTE_TASK, kind=SpanKind.CLIENT) as task_span:
+            task_span.set_attribute("gen_ai.operation.name", SPAN_EXECUTE_TASK)
+            task_span.set_attribute("workflow.name", "hol-obs-semconv")
+            task_span.set_attribute("task.description", task)
+
+            with tracer.start_as_current_span(SPAN_PLANNING) as planning:
+                planning.set_attribute("plan.steps", [f"{name}: {prompt}" for name, prompt in PLAN])
+                print(f"  planned {len(PLAN)} steps")
+
+            conversation = client.conversations.create()
+            transcript = ""
+            previous = None
+
+            try:
+                with tracer.start_as_current_span(SPAN_ORCHESTRATION) as orchestration:
+                    orchestration.set_attribute("participants", [name for name, _ in PLAN])
+
+                    # The task rides on the first step only. Repeating it every turn would
+                    # cost input tokens to tell an agent what the conversation already holds.
+                    prompt_prefix = f"task: {task}\n\n"
+                    for name, prompt in PLAN:
+                        if previous:
+                            observability.handoff(
+                                previous, name, "the next step needs the previous findings")
+                            observability.record_state(conversation.id, len(transcript))
+                            prompt_prefix = ""
+
+                        print(f"\n  [{name}]", end=" ", flush=True)
+                        text = annotated_turn(tracer, client, agents[name], specs[name], schemas,
+                                              conversation.id, prompt_prefix + prompt,
+                                              handlers, args.sensitive_data)
+                        print(text)
+                        transcript += text
+                        previous = name
+            finally:
+                client.conversations.delete(conversation_id=conversation.id)
+
+            record_tool_call(tracer, "compute_slo",
+                             {"good_events": 9_973, "total_events": 10_000},
+                             "availability 99.730%, error budget remaining -170.0%")
+
+            # The convention's Evaluation event, which is how a quality judgement is attached
+            # to the run that produced it rather than stored somewhere that has to be joined.
+            grounded = "checkout" in transcript.lower()
+            task_span.add_event(EVENT_EVALUATION, {
+                "name": "groundedness",
+                "error.type": "" if grounded else "ungrounded_response",
+                "label": "pass" if grounded else "fail",
+            })
+            print(f"\n  evaluation groundedness {'pass' if grounded else 'fail'}")
+
+    observability.report(args, capture)
 
 
 if __name__ == "__main__":
