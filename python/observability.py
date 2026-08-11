@@ -354,6 +354,34 @@ def build_cast(args):
     """Five agents on one chat client, returned by name so each scenario can pick the
     subset its pattern needs.
 
+    KNOWN LIMITATION — reasoning models. Verified failing against gpt-5.6-terra on
+    2026-08-11: as soon as one agent calls a tool and its turn is handed to the next
+    agent, the run dies with
+
+        ChatClientInvalidRequestException: Stateless replay cannot reconstruct
+        reasoning item(s) rs_... for call(s) call_... because encrypted reasoning
+        content is missing.
+
+    A reasoning model pairs a text_reasoning item with the function_call in one group.
+    Crossing an agent boundary replays that group statelessly, and the encrypted payload
+    that would make it replayable does not survive the crossing. Everything before that
+    point works — provider wiring, span capture, workflow build, the first agent's tools.
+
+    What does not fix it: SequentialBuilder(chain_only_agent_responses=True). The
+    response messages carry the group too.
+
+    Where the fix lives, for whoever picks this up:
+      - AgentExecutor(agent, context_mode="custom", context_filter=...) in
+        agent_framework/_workflows/_agent_executor.py takes list[Message] -> list[Message].
+        Dropping text_reasoning, function_call and function_result contents there should
+        clear it. SequentialBuilder and ConcurrentBuilder accept Executors as
+        participants, so those two can use it directly.
+      - HandoffBuilder, GroupChatBuilder and MagenticBuilder accept Agents only, so they
+        need the other route the exception names: service-side continuation
+        (agent_framework_openai/_chat_client.py:1407, request_uses_service_side_storage)
+        or an explicit compaction_strategy (agent_framework/_compaction.py).
+      - Or run the lab on a non-reasoning deployment, which sidesteps all of it.
+
     Every agent gets an explicit id. Foundry correlates traces from agents it does not
     host by gen_ai.agent.id on the create_agent span, so an agent without one is an
     agent whose spans the portal cannot group.
