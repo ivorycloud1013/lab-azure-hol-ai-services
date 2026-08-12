@@ -22,7 +22,6 @@ exist, which is what configure_otel_providers() does.
 
 import argparse
 import asyncio
-import os
 from typing import Annotated
 
 from agent_framework import Agent, tool
@@ -65,24 +64,12 @@ def parse_args():
                "process's spans: the framework talks to the model deployment, so there is "
                "no Foundry agent for the portal to file them under.",
     )
-    parser.add_argument("--endpoint",
-                        default=os.getenv("FOUNDRY_PROJECT_ENDPOINT")
-                        or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
-                        help="Foundry project endpoint")
-    parser.add_argument("--deployment",
-                        default=os.getenv("FOUNDRY_MODEL_NAME")
-                        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.6-terra"),
-                        help="model deployment name")
-    parser.add_argument("--export", choices=["console", "azure-monitor"], default="console")
-    parser.add_argument("--content", action="store_true",
-                        help="record prompts, answers and tool arguments in the spans. "
-                             "Development only.")
-    parser.add_argument("--question", default=QUESTION)
+    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
+    parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
+    parser.add_argument("--export", choices=["console", "azure-monitor"],
+                        default="azure-monitor")
 
-    args = parser.parse_args()
-    if not args.endpoint:
-        parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
-    return args
+    return parser.parse_args()
 
 
 def configure_tracing(args):
@@ -107,10 +94,13 @@ def configure_tracing(args):
         ):
             configure_azure_monitor(
                 connection_string=project.telemetry.get_application_insights_connection_string())
-        enable_instrumentation(enable_sensitive_data=args.content)
+        # Off, and said out loud rather than left to the default: sensitive data means the
+        # prompts, answers and tool arguments, and this lab exports to a shared Application
+        # Insights resource.
+        enable_instrumentation(enable_sensitive_data=False)
     else:
         configure_otel_providers(enable_console_exporters=True,
-                                 enable_sensitive_data=args.content)
+                                 enable_sensitive_data=False)
 
 
 async def main():
@@ -133,7 +123,7 @@ async def main():
             print(f"  trace {root.get_span_context().trace_id:032x}")
 
             async with agent:
-                result = await agent.run(args.question)
+                result = await agent.run(QUESTION)
             print(f"\n  {result.text}\n")
 
     if args.export == "azure-monitor":

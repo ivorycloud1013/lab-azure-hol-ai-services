@@ -62,29 +62,17 @@ def parse_args():
                "connected to the project, which is what makes them show up in the Foundry "
                "portal under Traces — allow 2-5 minutes.",
     )
-    parser.add_argument("--endpoint",
-                        default=os.getenv("FOUNDRY_PROJECT_ENDPOINT")
-                        or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
-                        help="Foundry project endpoint")
-    parser.add_argument("--deployment",
-                        default=os.getenv("FOUNDRY_MODEL_NAME")
-                        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.6-terra"),
-                        help="model deployment name")
-    parser.add_argument("--export", choices=["console", "azure-monitor"], default="console")
-    parser.add_argument("--content", action="store_true",
-                        help="record prompts and answers in the spans. Development only — "
-                             "this puts user messages in your telemetry.")
-    parser.add_argument("--task", default=TASK)
-    parser.add_argument("--keep", action="store_true",
-                        help="leave the three agents and the conversation behind. The spans "
-                             "reach the exporter either way — this is for the portal, which "
-                             "lists things that still exist. A kept run stacks a new agent "
-                             "version on the next pass.")
+    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
+    parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
+    parser.add_argument("--export", choices=["console", "azure-monitor"],
+                        default="azure-monitor")
+    parser.add_argument("--delete", action="store_true",
+                        help="clean up the three agents and the conversation on the way out. "
+                             "The spans reach the exporter either way — this is for the "
+                             "portal, which lists things that still exist. Left in place, the "
+                             "next run stacks a new agent version on top.")
 
-    args = parser.parse_args()
-    if not args.endpoint:
-        parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
-    return args
+    return parser.parse_args()
 
 
 def configure_tracing(args, project):
@@ -101,7 +89,10 @@ def configure_tracing(args, project):
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
         trace.set_tracer_provider(provider)
 
-    AIProjectInstrumentor().instrument(enable_content_recording=args.content)
+    # Off, and said out loud rather than left to the default: content recording puts user
+    # messages in the telemetry, and this lab exports to a shared Application Insights
+    # resource.
+    AIProjectInstrumentor().instrument(enable_content_recording=False)
 
 
 def create_agents(project, deployment):
@@ -115,8 +106,8 @@ def create_agents(project, deployment):
     }
 
 
-def delete_agents(project, agents, keep):
-    if keep:
+def delete_agents(project, agents, delete):
+    if not delete:
         for agent in agents.values():
             print(f"  kept agent {agent.name} version {agent.version}")
         return
@@ -161,20 +152,20 @@ def main():
                     # each agent can read what the previous one said without being told.
                     conversation = client.conversations.create()
                     print(f"  conversation {conversation.id}"
-                          f"{' (kept)' if args.keep else ''}")
+                          f"{'' if args.delete else ' (kept)'}")
                     try:
-                        run_pipeline(client, tracer, agents, conversation.id, args.task)
+                        run_pipeline(client, tracer, agents, conversation.id)
                     finally:
-                        if not args.keep:
+                        if args.delete:
                             client.conversations.delete(conversation_id=conversation.id)
             finally:
-                delete_agents(project, agents, args.keep)
+                delete_agents(project, agents, args.delete)
 
     if args.export == "azure-monitor":
         print("  sent to Application Insights — Foundry portal > Traces, 2-5 minutes")
 
 
-def run_pipeline(client, tracer, agents, conversation_id, task):
+def run_pipeline(client, tracer, agents, conversation_id):
     """Each agent takes one turn on the shared conversation, in order."""
     previous = None
     for name, _, step in PIPELINE:
@@ -182,7 +173,7 @@ def run_pipeline(client, tracer, agents, conversation_id, task):
             record_handoff(tracer, previous, name, step)
 
         # The task rides on the first turn only. After that the conversation holds it.
-        prompt = f"task: {task}\n\n{step}" if previous is None else step
+        prompt = f"task: {TASK}\n\n{step}" if previous is None else step
         agent = agents[name]
         response = client.responses.create(
             conversation=conversation_id,

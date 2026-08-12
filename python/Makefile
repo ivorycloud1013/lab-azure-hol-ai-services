@@ -5,9 +5,9 @@
 #   export AZURE_AI_PROJECT_ENDPOINT=https://<resource>.ai.azure.com/api/projects/<project>
 #   export AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5.6-terra
 #
-#   make ask-local FILE=assets/헌법.md QUESTION="…"  # one answer on this machine
-#   make local     FILE=assets/헌법.md               # serve it instead, nothing deployed
-#   make deploy    FILE=assets/헌법.md               # ship the same file to Foundry
+#   make ask-local FILE="..." QUESTION="…"  # one answer on this machine
+#   make local     FILE="..."               # serve it instead, nothing deployed
+#   make deploy    FILE="..."               # ship the same file to Foundry
 #   make invoke    QUESTION="…"
 #
 # The Foundry project and the model deployment come from iac/, so nothing here
@@ -24,15 +24,13 @@ HERE := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 AZD  := cd $(HERE) && AGENT_SOURCE_DOCUMENT="$(FILE)" \
         AZURE_AI_MODEL_DEPLOYMENT_NAME="$(AZURE_AI_MODEL_DEPLOYMENT_NAME)" azd
 
-.PHONY: help ask-local local ask stage provision run deploy invoke monitor down clean
+.PHONY: help ask-local local stage provision deploy invoke monitor down check-file check-endpoint
 
 help:
 	@echo "ask-local  FILE=…  ask the hosted agent's code one question, no server"
 	@echo "local      FILE=…  run the agent on localhost:$(PORT), nothing deployed"
-	@echo "ask        FILE=…  the ephemeral Responses-API agent over the same file"
 	@echo "stage      FILE=…  stage $(STAGED) and list exactly what deploy uploads"
 	@echo "provision          create the azd environment against the existing project"
-	@echo "run        FILE=…  azd's local runner and agent inspector"
 	@echo "deploy     FILE=…  package and deploy to Foundry Agent Service"
 	@echo "invoke     QUESTION=…  ask the deployed agent"
 	@echo "monitor            follow the hosted agent's container logs"
@@ -46,10 +44,6 @@ ask-local: check-file check-endpoint
 local: check-file check-endpoint
 	cd $(HERE) && python hol-foundry-agents-hosted.py --file "$(FILE)" --port $(PORT)
 
-ask: check-file check-endpoint
-	cd $(HERE) && python hol-foundry-agents-responses.py \
-		--endpoint "$(AZURE_AI_PROJECT_ENDPOINT)" --file "$(FILE)" --question "$(QUESTION)"
-
 # azd itself runs the prepackage hook and applies .agentignore, so asking azd to
 # package is the only way to see the real upload. Anything else is a guess.
 stage: check-file check-endpoint
@@ -58,9 +52,6 @@ stage: check-file check-endpoint
 
 provision: check-endpoint
 	$(AZD) provision
-
-run: check-file check-endpoint
-	$(AZD) ai agent run
 
 deploy: check-file check-endpoint
 	$(AZD) deploy
@@ -73,9 +64,6 @@ monitor:
 
 down:
 	$(AZD) down
-
-clean:
-	rm -rf $(HERE)/$(PACKAGE)
 
 check-file:
 	@test -n "$(FILE)" || { echo "pass FILE=<markdown file>, e.g. make $(MAKECMDGOALS) FILE=assets/doc.md"; exit 1; }

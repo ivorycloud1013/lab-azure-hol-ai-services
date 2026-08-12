@@ -31,7 +31,7 @@ def parse_args():
                "depends mostly on the input format and on --stt-phrase: 16 kHz mono PCM and a "
                "few domain terms are worth more than any other knob here.",
     )
-    parser.add_argument("--endpoint", required=True, help="Foundry account endpoint (custom domain)")
+    parser.add_argument("--endpoint", required=True, help="Foundry speech endpoint")
 
     identity.add_auth_arguments(parser)
 

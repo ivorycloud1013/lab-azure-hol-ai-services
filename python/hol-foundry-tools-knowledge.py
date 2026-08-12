@@ -70,8 +70,6 @@ def parse_args():
     knowledge.add_argument("--bing-connection", metavar="NAME",
                            help="project connection to Grounding with Bing Search, to answer from "
                                 "the public web as well — no default, connections vary by project")
-    knowledge.add_argument("--filter", metavar="ODATA",
-                           help="OData filter applied to every search, e.g. \"category eq '기술'\"")
 
     parser.add_argument("--agent-name", default=DEFAULT_AGENT_NAME,
                         help=f"agent to create a version of (default {DEFAULT_AGENT_NAME})")
@@ -120,7 +118,6 @@ def build_search_tool(project, args):
         index_name=args.index,
         query_type=QUERY_TYPE,
         top_k=TOP_K,
-        filter=args.filter,
     )
     print(f"grounding on index {args.index} ({QUERY_TYPE}, top {TOP_K})")
     # One index resource per agent is the service limit, so this list never grows.
@@ -150,7 +147,7 @@ def create_version(project, args):
     """A prompt agent is declarative — model, instructions and knowledge live in
     the service, which retrieves and answers on its own.
 
-    A new version every run, because the index and the filter are part of the
+    A new version every run, because the knowledge sources are part of the
     definition and this script exists to let you change them and compare.
     """
     agent = project.agents.create_version(
