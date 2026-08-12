@@ -104,6 +104,10 @@ def parse_args():
         parser.error("--agent-name and --project-name go together")
     if args.agent_name and args.model:
         parser.error("--agent-name already carries a model, so --model does not apply")
+    if args.agent_name and args.auth == "api-key":
+        # Agent invocation is Entra only. Without this the run dials out and fails
+        # on the websocket handshake instead of here.
+        parser.error("agent mode does not support key authentication, use an Entra method")
     return args
 
 

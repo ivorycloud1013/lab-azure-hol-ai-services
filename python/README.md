@@ -512,6 +512,10 @@ python hol-foundry-tools-mcp.py \
 Voice Live API 로 **웹소켓 하나에 음성 입력과 음성 출력을 함께** 실어 대화합니다.
 STT·TTS 를 따로 호출하는 [`hol-foundry-models-stt_tts.py`](#hol-foundry-models-stt_ttspy) 와 대비되는 경로입니다.
 
+대답하는 쪽은 둘 중 하나입니다 — **모델(`--model`)** 이거나, **Foundry Agent Service 의 agent(`--agent-name` + `--project-name`)** 입니다.
+후자를 쓰면 앞의 knowledge · mcp 예제로 만들어 둔 agent 가 자기 instructions · knowledge · tool 을 그대로 들고 음성으로 답합니다.
+음성 처리 자체는 어느 쪽이든 Voice Live 가 맡으므로, 엔드포인트는 project 가 아니라 **계정** 엔드포인트입니다.
+
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart LR
@@ -538,6 +542,7 @@ flowchart LR
 - `--audio-in` 과 `--mic` 중 **정확히 하나**만 줍니다.
 - `--agent-name` 과 `--project-name` 은 한 쌍이고, agent 가 이미 모델을 갖고 있으므로 `--model` 과는 함께 쓸 수 없습니다.
 - `--agent-name` 을 쓰면 agent 의 instructions 를 덮어쓰지 않습니다 — `--instructions` 를 명시했을 때만 바뀝니다.
+- agent 경로는 **Entra ID 전용**입니다. 키 인증을 지원하지 않으므로 `--auth api-key` 를 주면 실행 전에 막힙니다. 계정에 `Foundry User` 역할이 필요합니다.
 - `--mic` 는 `sounddevice` 패키지와 사운드카드가 필요합니다. Bastion 으로 접속한 점프박스라면 `--audio-in` 을 쓰세요.
 - `--mic` 에서는 서비스가 VAD 로 턴을 끊고 barge-in(말 끊기)이 동작합니다. `--audio-in` 은 파일 전체가 한 턴입니다.
 - 입력 WAV 형식이 맞지 않으면 전송 전에 멈추고 변환 명령을 알려 줍니다 — `ffmpeg -i in.wav -ac 1 -ar 24000 -sample_fmt s16 converted.wav`
@@ -556,10 +561,18 @@ python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
   --mic --seconds 30
 
-# knowledge 예제가 남긴 agent 에게 말로 묻기
+# Agent Service : knowledge 예제가 남긴 agent 에게 말로 묻기
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
   --agent-name hol-knowledge-rag \
   --project-name "<project-name>" \
   --mic
+
+# Agent Service : 같은 agent 에게 파일로 묻고, 버전 고정
+python hol-foundry-tools-voice.py \
+  --endpoint "<foundry-account-endpoint>" \
+  --agent-name hol-mcp-ops \
+  --project-name "<project-name>" \
+  --agent-version 1 \
+  --audio-in question.wav
 ```
