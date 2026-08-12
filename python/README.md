@@ -398,13 +398,6 @@ python hol-foundry-tools-content-understanding.py \
   --file "assets/agents/2026 휴식이 있는 캘린더.pdf" \
   --out-dir assets/tools
 
-# 여러 문서 한 번에
-python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --file "assets/agents/KB주택시장리뷰_2025년 10월호.pdf" \
-  --file "assets/agents/대한민국 헌법.pdf" \
-  --out-dir assets/tools
-
 # 다른 prebuilt analyzer 로 : 레이아웃만 (모델 배포 불필요)
 python hol-foundry-tools-content-understanding.py \
   --endpoint "<foundry-project-endpoint>" \
@@ -417,13 +410,12 @@ python hol-foundry-tools-content-understanding.py \
 
 ### hol-foundry-tools-knowledge.py
 
-Azure AI Search 인덱스(그리고 선택적으로 Bing)를 prompt agent 의 **지식**으로 선언합니다.
-검색은 서비스가 project 연결을 통해 직접 수행하므로, 인덱스가 이 프로세스에서 보일 필요는 없습니다.
+Azure AI Search 인덱스(그리고 선택적으로 Bing)를 prompt agent 의 knowledge 으로 연결합니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
-flowchart LR
-    USER["cmdline arguments"] --> TOOL["AzureAISearchTool </br> BingGroundingTool"] --> AG["AIProjectClient.agents.create_version()"] --> CONV["conversations.create()"] --> ASK["responses.create()"] --> OUT["Response + citations"]
+flowchart TB
+    USER["cmdline arguments"] --> AG["AIProjectClient.agents.create_version()"] --> CONV["AIProjectClient.get_openai_client().conversations.create()"] --> ASK["AIProjectClient.get_openai_client().responses.create()"] --> OUT["Response + citations"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -438,13 +430,8 @@ flowchart LR
 | `--show-sources` | 끔 | agent 가 돌린 검색과 인용을 그대로 출력 |
 | `--delete` | 끔 | 끝나고 agent 삭제 |
 
-- `--index` 와 `--bing-connection` 중 **최소 하나**는 있어야 합니다.
 - 인덱스는 [`aisrch-init-upload-documents.py`](aisrch-init-upload-documents.py) 가 먼저 만들어 둔 것을 씁니다.
 - 검색은 **project identity** 로 수행되므로, 내가 아니라 project 에 Search 서비스의 `Search Index Data Reader` 가 필요합니다.
-- 쿼리 타입은 `semantic` 고정입니다. 랩 인덱스는 업로드 시점에 임베딩해 vectorizer 가 없으므로 vector 계열 쿼리는 오류가 납니다.
-- 실행할 때마다 새 버전을 만듭니다 — 지식 소스가 정의의 일부라 바꿔 가며 비교하라는 뜻입니다.
-- `--auth api-key` · `--auth access-token` 은 projects SDK 가 지원하지 않습니다.
-- `--delete` 를 주지 않으면 agent 가 남으므로, 이어서 `hol-foundry-tools-voice.py --agent-name` 으로 같은 지식에 말로 물어볼 수 있습니다.
 
 ```bash
 # 인덱스 하나로 묻기
@@ -453,42 +440,30 @@ python hol-foundry-tools-knowledge.py \
   --index housing \
   --question "2025년 10월 서울 아파트 매매가격 흐름을 요약해줘."
 
-# 검색 과정까지 보기 + 이어 묻기
-python hol-foundry-tools-knowledge.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --index merchants \
-  --show-sources \
-  --question "서울 강남구 가맹점 수가 가장 많은 업종은?" \
-  --question "그 근거가 된 레코드를 인용해줘."
-
 # 인덱스 + 공개 웹, 그리고 정리
 python hol-foundry-tools-knowledge.py \
   --endpoint "<foundry-project-endpoint>" \
   --index news \
   --bing-connection "<bing-connection-name>" \
-  --question "최근 기술 뉴스 흐름을 정리해줘." \
-  --delete
+  --question "최근 기술 뉴스 흐름을 정리해줘."
 ```
 
 ---
 
 ### hol-foundry-tools-mcp.py
 
-원격 MCP 서버를 prompt agent 의 **도구**로 선언합니다. 서버 호출도 서비스가 직접 하므로
-이 프로세스에서 프록시되는 것은 없습니다.
+원격 MCP 서버를 prompt agent 의 tool 로 선언합니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
-flowchart LR
-    USER["cmdline arguments"] --> SPEC["--learn / --mcp / --connection"] --> TOOL["MCPTool"] --> AG["AIProjectClient.agents.create_version()"] --> ASK["responses.create()"] --> OUT["Response"]
-    ASK <-.-> SRV["Remote MCP server"]
+flowchart TB
+    USER["cmdline arguments"] --> AG["AIProjectClient.agents.create_version()"] --> ASK["AIProjectClient.get_openai_client().responses.create()"] --> OUT["Response"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
 | `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--learn` | 끔 | 공개 Microsoft Learn MCP 서버 붙이기 |
 | `--mcp` | — | `LABEL=URL` 또는 `LABEL=URL=AUDIENCE`, 반복 가능 |
 | `--connection` | — | `LABEL=CONNECTION_ID`, project 가 이미 가진 연결, 반복 가능 |
 | `--allowed-tool` | — | 모든 서버를 이 이름의 도구로 제한, 반복 가능 |
@@ -498,30 +473,31 @@ flowchart LR
 | `--show-tools` | 끔 | 발견한 도구 목록과 호출 내역 출력 |
 | `--delete` | 끔 | 끝나고 agent 삭제 |
 
-- `--learn` · `--mcp` · `--connection` 중 **최소 하나**는 있어야 하고, 섞어 써도 됩니다.
-- 인증 방식이 셋의 차이입니다 — `--learn` 은 공개·무인증, `--mcp` 의 `AUDIENCE` 는 **내 Entra 토큰**을 정의에 심어 두므로 토큰이 만료되면 그 버전은 동작을 멈추고, `--connection` 은 project identity 로 인증해 계속 동작합니다.
+- `--mcp` · `--connection` 중 **최소 하나**는 있어야 하고, 섞어 써도 됩니다.
+- 인증 방식이 셋의 차이입니다 — `AUDIENCE` 없는 `--mcp` 는 공개·무인증(예: Microsoft Learn), `AUDIENCE` 를 준 `--mcp` 는 **내 Entra 토큰**을 정의에 심어 두므로 토큰이 만료되면 그 버전은 동작을 멈추고, `--connection` 은 project identity 로 인증해 계속 동작합니다.
 - 그래서 실행할 때마다 새 버전을 만듭니다.
 - `--allowed-tool` 과 `--read-only` 는 함께 쓸 수 없습니다.
-- 도구 호출 승인은 `never` 입니다 — 터미널에서 자문자답하는 랩에는 승인해 줄 사람이 없고, Learn 은 읽기 전용입니다.
+- 도구 호출 승인은 `never` 입니다 — 터미널에서 자문자답하는 랩에는 승인해 줄 사람이 없으니, 읽기 전용 서버와 함께 쓰세요.
 - `--auth api-key` · `--auth access-token` 은 projects SDK 가 지원하지 않습니다.
 
 ```bash
-# 가장 간단 : 공개 Learn MCP 서버
+# 가장 간단 : 공개 Microsoft Learn MCP 서버 (인증 불필요)
 python hol-foundry-tools-mcp.py \
   --endpoint "<foundry-project-endpoint>" \
-  --learn \
+  --mcp "learn=https://learn.microsoft.com/api/mcp" \
   --question "Azure Private Endpoint 와 Service Endpoint 차이를 문서 기준으로 알려줘."
 
 # 도구 호출 과정까지 보기
 python hol-foundry-tools-mcp.py \
   --endpoint "<foundry-project-endpoint>" \
-  --learn --show-tools \
+  --mcp "learn=https://learn.microsoft.com/api/mcp" \
+  --show-tools \
   --question "Foundry Agent Service 의 지원 리전을 알려줘."
 
-# 다른 서버 함께 붙이기 + 읽기 전용 제한
+# 여러 서버 함께 붙이기 + 읽기 전용 제한
 python hol-foundry-tools-mcp.py \
   --endpoint "<foundry-project-endpoint>" \
-  --learn \
+  --mcp "learn=https://learn.microsoft.com/api/mcp" \
   --mcp "myapi=https://<my-mcp-host>/mcp=https://<my-api-audience>" \
   --connection "internal=<project-connection-id>" \
   --read-only \
