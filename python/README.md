@@ -454,12 +454,6 @@ flowchart TB
 | `--show-tools` | 끔 | 발견한 도구 목록과 호출 내역 출력 |
 | `--delete` | 끔 | 끝나고 agent 삭제 |
 
-- `AUDIENCE` 유무가 인증의 차이입니다 — 없으면 공개·무인증(예: Microsoft Learn), 주면 **내 Entra 토큰**을 agent 정의에 심어 두므로 토큰이 만료되면 그 버전은 동작을 멈춥니다.
-- 그래서 실행할 때마다 새 버전을 만듭니다.
-- 서버를 부르는 것은 이 프로세스가 아니라 **서비스**입니다. 정의에 URL 만 넣어 두면 Foundry 가 직접 나가므로, 그 URL 이 서비스 쪽에서 닿아야 합니다.
-- 도구 호출 승인은 `never` 입니다 — 터미널에서 자문자답하는 랩에는 승인해 줄 사람이 없으니, 읽기 전용 서버와 함께 쓰세요.
-- `--auth api-key` · `--auth access-token` 은 projects SDK 가 지원하지 않습니다.
-
 ```bash
 # 가장 간단 : 공개 Microsoft Learn MCP 서버 (인증 불필요)
 python hol-foundry-tools-mcp.py \
@@ -485,20 +479,7 @@ python hol-foundry-tools-mcp.py \
 
 ### hol-foundry-tools-voice.py
 
-Voice Live API 로 **웹소켓 하나에 음성 입력과 음성 출력을 함께** 실어 대화합니다.
-STT·TTS 를 따로 호출하는 [`hol-foundry-models-stt_tts.py`](#hol-foundry-models-stt_ttspy) 와 대비되는 경로입니다.
-
-대답하는 쪽은 셋 중 하나입니다.
-
-| 쓰는 인자 | 대답하는 쪽 |
-|---|---|
-| **`--project-endpoint`** | knowledge · mcp 예제처럼 **이 스크립트가 `create_version()` 으로 만든 음성 전용 agent** |
-| `--agent-name` + `--project-name` | 이미 있는 agent (예: `hol-knowledge-rag`) |
-| (없음) · `--model` | realtime 모델 직결 |
-
-첫 줄이 Agent Service 경로입니다 — project 에 prompt agent 를 만들고, 방금 만든 그 버전에 붙어 대화합니다.
-음성 처리 자체는 어느 쪽이든 Voice Live 가 맡으므로 `--endpoint` 는 project 가 아니라 **계정** 엔드포인트이고,
-agent 를 만들 project 는 `--project-endpoint` 로 따로 받습니다. project 이름은 그 URL 끝에서 읽어냅니다.
+Voice Live API 로 에이전트와 음성으로 대화합니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
@@ -524,15 +505,6 @@ flowchart TB
 | `--voice` | `en-US-AvaMultilingualNeural` | Azure voice |
 | `--language` | 자동 감지 | 입력 음성 언어, 예 `ko-KR` |
 | `--instructions` | 랩 기본 프롬프트 | 어시스턴트 역할 재정의 |
-
-- 입력은 **마이크**, 출력은 **스피커** 입니다. `sounddevice` 패키지와 사운드카드가 필요하므로, Bastion 으로 접속한 점프박스에서는 동작하지 않습니다.
-- 서비스가 VAD 로 턴을 끊고 barge-in(말 끊기)이 동작합니다 — 어시스턴트가 말하는 중에 말을 걸면 재생이 멈춥니다.
-- `--project-endpoint` 는 매 실행마다 새 버전을 만들고, 방금 만든 그 버전에 붙습니다. `--instructions` 는 세션이 아니라 **agent 정의**에 들어갑니다.
-- `--agent-name` 과 `--project-name` 은 한 쌍이고, agent 가 이미 모델을 갖고 있으므로 `--model` 과는 함께 쓸 수 없습니다.
-- 이미 있는 agent 에 붙을 때는 그 agent 의 instructions 를 덮어쓰지 않습니다 — `--instructions` 를 명시했을 때만 바뀝니다.
-- agent 경로는 **Entra ID 전용**입니다. 키 인증을 지원하지 않으므로 `--auth api-key` 를 주면 실행 전에 막힙니다. 계정에 `Foundry User` 역할이 필요합니다.
-- 실행 도중 실패하면 이번 실행이 **새로 만든** agent 만 지웁니다. 이미 있던 agent 에 버전만 더한 경우는 남겨 둡니다.
-- `--auth access-token` 은 Voice Live SDK 가 지원하지 않습니다.
 
 ```bash
 # Agent Service : 음성 전용 agent 를 만들어 대화
