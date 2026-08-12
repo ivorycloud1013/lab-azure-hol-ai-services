@@ -66,7 +66,6 @@ def parse_args():
     parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
     parser.add_argument("--export", choices=["console", "azure-monitor"],
                         default="azure-monitor")
-    parser.add_argument("--task", default=TASK)
     parser.add_argument("--delete", action="store_true",
                         help="clean up the three agents and the conversation on the way out. "
                              "The spans reach the exporter either way — this is for the "
@@ -155,7 +154,7 @@ def main():
                     print(f"  conversation {conversation.id}"
                           f"{'' if args.delete else ' (kept)'}")
                     try:
-                        run_pipeline(client, tracer, agents, conversation.id, args.task)
+                        run_pipeline(client, tracer, agents, conversation.id)
                     finally:
                         if args.delete:
                             client.conversations.delete(conversation_id=conversation.id)
@@ -166,7 +165,7 @@ def main():
         print("  sent to Application Insights — Foundry portal > Traces, 2-5 minutes")
 
 
-def run_pipeline(client, tracer, agents, conversation_id, task):
+def run_pipeline(client, tracer, agents, conversation_id):
     """Each agent takes one turn on the shared conversation, in order."""
     previous = None
     for name, _, step in PIPELINE:
@@ -174,7 +173,7 @@ def run_pipeline(client, tracer, agents, conversation_id, task):
             record_handoff(tracer, previous, name, step)
 
         # The task rides on the first turn only. After that the conversation holds it.
-        prompt = f"task: {task}\n\n{step}" if previous is None else step
+        prompt = f"task: {TASK}\n\n{step}" if previous is None else step
         agent = agents[name]
         response = client.responses.create(
             conversation=conversation_id,

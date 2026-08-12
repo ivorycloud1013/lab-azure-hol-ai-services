@@ -613,8 +613,10 @@ flowchart TB
 | `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
-| `--question` | `What is the weather in Seoul, and should I take an umbrella?` | 질문 |
 | `--delete` | 끔 | 끝나고 agent · conversation 정리 |
+
+- 질문은 `QUESTION` 상수로 고정되어 있습니다(서울 날씨와 우산). 이 스크립트가 보여 주려는 것은 답이 아니라
+  **span 이 어떻게 남는가** 이므로, 매번 같은 것을 물어 trace 끼리 비교할 수 있게 했습니다.
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
@@ -670,8 +672,10 @@ flowchart TB
 | `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
-| `--task` | checkout p95 latency 회귀 시나리오 | 세 agent 에게 줄 과제 |
 | `--delete` | 끔 | 끝나고 agent 셋 · conversation 정리 |
+
+- 과제는 `TASK` 상수로 고정되어 있습니다(checkout p95 latency 회귀). 이 스크립트가 보여 주려는 것은 답이 아니라
+  **세 호출이 하나의 trace 로 묶이는가** 이므로, 매번 같은 것을 물어 trace 끼리 비교할 수 있게 했습니다.
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
@@ -694,10 +698,14 @@ flowchart TB
 python hol-foundry-observability-multi.py \
   --endpoint "<foundry-project-endpoint>"
 
-# 다른 과제로 돌리고, 끝나고 정리
+# span 모양만 터미널에서 보기
 python hol-foundry-observability-multi.py \
   --endpoint "<foundry-project-endpoint>" \
-  --task "배포 후 주문 API 오류율이 0.2%에서 7%로 올랐다. 원인과 대응을 정리해줘." \
+  --export console
+
+# 정리 : agent 셋 · conversation 삭제
+python hol-foundry-observability-multi.py \
+  --endpoint "<foundry-project-endpoint>" \
   --delete
 ```
 
@@ -714,12 +722,7 @@ python hol-foundry-observability-multi.py \
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    ROOT["Scenario: pipeline over HTTP (root span)"] --> P1["POST /researcher — inject(headers)"]
-    ROOT --> P2["POST /analyst"]
-    ROOT --> P3["POST /writer"]
-    P1 --> H1["handle /researcher — extract(headers)"] --> I1["invoke_agent"]
-    P2 --> H2["handle /analyst"] --> I2["invoke_agent"]
-    P3 --> H3["handle /writer"] --> I3["invoke_agent"]
+    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> C["AIProjectClient.agents.create_version() × 3"] --> BAG["baggage.set_baggage('session.id')"] --> ROOT["span('Scenario: pipeline over HTTP') 설정"] --> P1["span('POST /researcher') </br> inject(headers)"] --> H1["span('handle /researcher') </br> extract(headers)"] --> I1["AIProjectClient.get_openai_client().responses.create()"] --> P2["span('POST /analyst') </br> inject(headers)"] --> H2["span('handle /analyst') </br> extract(headers)"] --> I2["AIProjectClient.get_openai_client().responses.create()"] --> P3["span('POST /writer') </br> inject(headers)"] --> H3["span('handle /writer') </br> extract(headers)"] --> I3["AIProjectClient.get_openai_client().responses.create()"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -773,10 +776,12 @@ python hol-foundry-observability-propagation.py \
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    ROOT["Scenario: single agent (root span)"] --> INV["invoke_agent weather-agent"]
-    INV --> CH1["chat — 모델 왕복 1"]
-    INV --> T["execute_tool fetch_weather"]
-    INV --> CH2["chat — 모델 왕복 2"]
+    SETUP["Exporter 설정"] --> INST["configure_otel_providers() </br> or enable_instrumentation()"] --> AG["Agent(client=FoundryChatClient(...))"] --> ROOT["span('Scenario: single agent') 설정"] --> RUN["Agent.run()"]
+    subgraph LOOP["Agent.run() 이 도는 tool loop — 전부 invoke_agent span 의 자식"]
+        direction TB
+        CH1["chat"] --> T["execute_tool fetch_weather()"] --> CH2["chat"]
+    end
+    RUN --> CH1
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -784,8 +789,9 @@ flowchart TB
 | `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
-| `--question` | `What is the weather in Seoul, and should I take an umbrella?` | 질문 |
 
+- 질문은 `QUESTION` 상수로 고정되어 있습니다 — [`hol-foundry-observability-single.py`](#hol-foundry-observability-singlepy) 와
+  **같은 질문**이라, 두 파일을 나란히 돌리면 차이가 span 트리 모양에서만 납니다.
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
 - `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고 2~5분 뒤 보입니다.

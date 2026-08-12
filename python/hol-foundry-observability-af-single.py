@@ -68,7 +68,6 @@ def parse_args():
     parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
     parser.add_argument("--export", choices=["console", "azure-monitor"],
                         default="azure-monitor")
-    parser.add_argument("--question", default=QUESTION)
 
     return parser.parse_args()
 
@@ -124,7 +123,7 @@ async def main():
             print(f"  trace {root.get_span_context().trace_id:032x}")
 
             async with agent:
-                result = await agent.run(args.question)
+                result = await agent.run(QUESTION)
             print(f"\n  {result.text}\n")
 
     if args.export == "azure-monitor":

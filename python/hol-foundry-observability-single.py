@@ -83,7 +83,6 @@ def parse_args():
     parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
     parser.add_argument("--export", choices=["console", "azure-monitor"],
                         default="azure-monitor")
-    parser.add_argument("--question", default=QUESTION)
     parser.add_argument("--delete", action="store_true",
                         help="clean up the agent and the conversation on the way out. The "
                              "spans reach the exporter either way — this is for the portal, "
@@ -189,7 +188,7 @@ def main():
                       f"{'' if args.delete else ' (kept)'}")
                 try:
                     response = client.responses.create(conversation=conversation.id,
-                                                       input=args.question,
+                                                       input=QUESTION,
                                                        extra_body=reference)
                     outputs = answer_tool_calls(tracer, response, agent)
                     if outputs:
