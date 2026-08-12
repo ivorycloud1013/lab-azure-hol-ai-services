@@ -53,12 +53,15 @@ export ENDPOINT=https://<리소스>.cognitiveservices.azure.com
 
 시스템·사용자 프롬프트를 한 번 보내고 답을 받습니다.
 
-```
-  --system ┐
-           ├─► OpenAI(base_url=<endpoint>/openai/v1/) ──► chat.completions.create ──► stdout
-  --user  ─┘              ▲                                       │
-                          │                                       └─ --stream 이면 조각마다 출력
-              identity.py ─┘ (요청마다 토큰 갱신)
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart LR
+    SYS["--system"] --> CLIENT
+    USER["--user"] --> CLIENT
+    ID["identity.py<br/>Entra ID 토큰 (요청마다 갱신)"] -.-> CLIENT
+    CLIENT["OpenAI 클라이언트<br/>base_url = $ENDPOINT/openai/v1/"] --> CALL["chat.completions.create"]
+    CALL --> OUT["stdout"]
+    CALL -.->|"--stream"| CHUNK["조각마다 출력"]
 ```
 
 `AzureOpenAI` 클라이언트도, `api_version`도 쓰지 않습니다. v1 API는 표준 `OpenAI` 클라이언트에
@@ -98,10 +101,15 @@ python hol-foundry-models-llm.py --endpoint $ENDPOINT --auth device-code \
 
 `gpt-image` 계열로 이미지를 만들거나 고칩니다.
 
-```
-                        ┌─ generate ─► images.generate ─┐
-  --prompt ─────────────┤                               ├─► base64 ─► --out (PNG)
-  --image / --mask ─────┴─ edit ─────► images.edit ─────┘
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart LR
+    PROMPT["--prompt<br/>또는 --prompt-file"] --> GEN["images.generate"]
+    PROMPT --> EDIT["images.edit"]
+    SRC["--image / --mask<br/>--method edit 전용"] --> EDIT
+    GEN --> B64["base64 응답"]
+    EDIT --> B64
+    B64 --> OUT["--out (PNG)<br/>여러 장이면 1-, 2- 접두사"]
 ```
 
 `--mask`는 `--image`에서 **바꿀 영역**을 표시한 PNG입니다(투명한 부분이 교체 대상).
@@ -143,12 +151,19 @@ python hol-foundry-models-vlm.py --endpoint $ENDPOINT --method edit \
 Azure Speech로 텍스트를 소리로(TTS), 소리를 텍스트로(STT) 바꿉니다.
 `--tts-input`과 `--stt-input` 중 **정확히 하나**만 줍니다.
 
-```
-  --tts-input ─► SpeechSynthesizer ─────────────────────────► --tts-output (WAV)
-
-  --stt-input ─► 형식 확인 ─► SpeechRecognizer(연속 인식) ─► 조각 모으기 ─► stdout
-                    │              ▲
-             16 kHz 모노 16bit    --stt-phrase / --stt-silence-ms / TrueText
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart LR
+    subgraph TTS
+        direction LR
+        TIN["--tts-input<br/>(텍스트)"] --> SYNTH["SpeechSynthesizer"] --> TOUT["--tts-output<br/>(WAV)"]
+    end
+    subgraph STT
+        direction LR
+        SIN["--stt-input<br/>(WAV)"] --> FMT["형식 확인<br/>16 kHz 모노 16bit"]
+        FMT --> REC["SpeechRecognizer<br/>연속 인식"] --> PARTS["조각 모으기<br/>→ stdout"]
+        OPTS["--stt-phrase<br/>--stt-silence-ms<br/>TrueText 후처리"] -.-> REC
+    end
 ```
 
 인식은 `recognize_once`가 아니라 **연속 인식**입니다. `recognize_once`는 첫 발화 하나만 듣고
@@ -200,14 +215,14 @@ python hol-foundry-models-stt_tts.py --endpoint $ENDPOINT --stt-input meeting.wa
 Responses API의 조절 옵션을 하나씩 실행하고, 그때마다 `usage`를 찍어 줍니다.
 무엇이 얼마나 토큰을 쓰는지 눈으로 보는 것이 목적입니다.
 
-```
-  --demo ─► [verbosity] [max-tokens] [cfg] [reasoning] [parallel-tools]
-                 │           │         │        │             │
-                 │           │         │        │             └ 한 턴에 함수 3개 호출
-                 │           │         │        └ effort none ↔ high 비교
-                 │           │         └ 정규식 문법으로 출력 형태를 강제
-                 │           └ 상한을 낮추면 output_text 가 비므로 output 항목을 직접 읽음
-                 └ low / medium / high 의 output_tokens 비교
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart LR
+    DEMO["--demo"] --> V["verbosity<br/>low / medium / high 의 output_tokens 비교"]
+    DEMO --> M["max-tokens<br/>상한 아래에서는 output_text 가 비어 output 항목을 직접 읽음"]
+    DEMO --> C["cfg<br/>정규식 문법으로 출력 형태를 강제"]
+    DEMO --> R["reasoning<br/>effort none 과 high 비교"]
+    DEMO --> P["parallel-tools<br/>한 턴에 함수 3개 호출"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -234,12 +249,15 @@ python hol-foundry-models-optimize-reasoning.py --endpoint $ENDPOINT \
 
 프롬프트 캐시가 실제로 걸리는지, 그리고 구조화 출력이 모델마다 몇 토큰을 쓰는지 재 봅니다.
 
-```
-  caching         ─┐
-  cache-retention ─┼─► 같은 프롬프트 --rounds 회 반복 ─► prompt_tokens_details 출력
-  cache-key       ─┘                                     (cached_tokens 가 0 → N)
-
-  structured ─► chat.completions.parse(response_format=IntentEvent) ─► 배포별 completion_tokens
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart LR
+    A["caching<br/>암시적 캐시"] --> LOOP
+    B["cache-retention<br/>24h"] --> LOOP
+    K["cache-key<br/>엔드포인트 고정"] --> LOOP
+    LOOP["같은 프롬프트 --rounds 회 반복"] --> USAGE["prompt_tokens_details<br/>cached_tokens 0 → N"]
+    S["structured"] --> PARSE["chat.completions.parse<br/>response_format=IntentEvent"]
+    PARSE --> CMP["배포별 completion_tokens 비교"]
 ```
 
 캐시는 프롬프트 앞 1,024 토큰이 완전히 같아야 걸립니다. 그래서 데모마다 **첫 줄을 다르게 두고**
