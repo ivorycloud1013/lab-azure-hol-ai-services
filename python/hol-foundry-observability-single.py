@@ -79,29 +79,18 @@ def parse_args():
                "connected to the project, which is what makes them show up in the Foundry "
                "portal under Traces — allow 2-5 minutes.",
     )
-    parser.add_argument("--endpoint",
-                        default=os.getenv("FOUNDRY_PROJECT_ENDPOINT")
-                        or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
-                        help="Foundry project endpoint")
-    parser.add_argument("--deployment",
-                        default=os.getenv("FOUNDRY_MODEL_NAME")
-                        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.6-terra"),
-                        help="model deployment name")
-    parser.add_argument("--export", choices=["console", "azure-monitor"], default="console")
-    parser.add_argument("--content", action="store_true",
-                        help="record prompts and answers in the spans. Development only — "
-                             "this puts user messages and tool arguments in your telemetry.")
+    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
+    parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
+    parser.add_argument("--export", choices=["console", "azure-monitor"],
+                        default="azure-monitor")
     parser.add_argument("--question", default=QUESTION)
-    parser.add_argument("--keep", action="store_true",
-                        help="leave the agent and the conversation behind. The spans reach "
-                             "the exporter either way — this is for the portal, which lists "
-                             "things that still exist. A kept run stacks a new agent version "
-                             "on the next pass.")
+    parser.add_argument("--delete", action="store_true",
+                        help="clean up the agent and the conversation on the way out. The "
+                             "spans reach the exporter either way — this is for the portal, "
+                             "which lists things that still exist. Left in place, the next "
+                             "run stacks a new agent version on top.")
 
-    args = parser.parse_args()
-    if not args.endpoint:
-        parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
-    return args
+    return parser.parse_args()
 
 
 def configure_tracing(args, project):
@@ -120,10 +109,13 @@ def configure_tracing(args, project):
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
         trace.set_tracer_provider(provider)
 
-    AIProjectInstrumentor().instrument(enable_content_recording=args.content)
+    # Off, and said out loud rather than left to the default: content recording puts user
+    # messages and tool arguments in the telemetry, and this lab exports to a shared
+    # Application Insights resource.
+    AIProjectInstrumentor().instrument(enable_content_recording=False)
 
 
-def answer_tool_calls(tracer, response, agent, content):
+def answer_tool_calls(tracer, response, agent):
     """Run whatever functions the model asked for. [] means it is done talking to tools.
 
     The span is opened by hand rather than by @trace_function, and the difference is what
@@ -149,14 +141,8 @@ def answer_tool_calls(tracer, response, agent, content):
             span.set_attribute("gen_ai.tool.call.id", item.call_id)
             span.set_attribute("gen_ai.agent.name", agent.name)
             span.set_attribute("gen_ai.agent.id", agent.id)
-            if content:
-                span.set_attribute("gen_ai.tool.call.arguments",
-                                   json.dumps(arguments, ensure_ascii=False))
 
             result = fetch_weather(**arguments)
-
-            if content:
-                span.set_attribute("gen_ai.tool.call.result", result)
 
         outputs.append({"type": "function_call_output", "call_id": item.call_id,
                         "output": result})
@@ -190,7 +176,7 @@ def main():
                 ),
             )
             print(f"  agent {agent.name} version {agent.version}"
-                  f"{' (kept)' if args.keep else ''}")
+                  f"{'' if args.delete else ' (kept)'}")
 
             # The name and id here are what the instrumentor writes into gen_ai.agent.*,
             # and they are how the portal ties these spans to that agent's row.
@@ -199,12 +185,13 @@ def main():
 
             with project.get_openai_client() as client:
                 conversation = client.conversations.create()
-                print(f"  conversation {conversation.id}{' (kept)' if args.keep else ''}")
+                print(f"  conversation {conversation.id}"
+                      f"{'' if args.delete else ' (kept)'}")
                 try:
                     response = client.responses.create(conversation=conversation.id,
                                                        input=args.question,
                                                        extra_body=reference)
-                    outputs = answer_tool_calls(tracer, response, agent, args.content)
+                    outputs = answer_tool_calls(tracer, response, agent)
                     if outputs:
                         # A tool answer goes back as ordinary input, which is a second
                         # responses.create and therefore a second invoke_agent span.
@@ -212,10 +199,10 @@ def main():
                                                            input=outputs, extra_body=reference)
                     print(f"\n  {response.output_text}\n")
                 finally:
-                    if not args.keep:
+                    if args.delete:
                         client.conversations.delete(conversation_id=conversation.id)
 
-            if not args.keep:
+            if args.delete:
                 project.agents.delete_version(agent_name=agent.name,
                                               agent_version=agent.version, force=True)
 

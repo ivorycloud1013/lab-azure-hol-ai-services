@@ -600,34 +600,30 @@ Foundry 의 client-side tracing 을 다룹니다.
 ### hol-foundry-observability-single.py
 
 agent 하나가 tool 하나를 부르는 가장 짧은 실행입니다. tool loop 를 이 파일이 직접 돌리므로,
-한 번의 질문이 `responses.create()` **두 번**이 되고 span 도 그만큼 남습니다.
+한 번의 질문이 `responses.create()` 2번이 되고 span 도 그만큼 남습니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT
-    ROOT["Scenario: single agent (root span)"] --> C["create_agent"]
-    ROOT --> I1["invoke_agent — 1st responses.create()"]
-    ROOT --> T["execute_tool fetch_weather"]
-    ROOT --> I2["invoke_agent — 2nd responses.create()"]
+    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: single agent') 설정"] --> C["AIProjectClient.agents.create_version()"] --> I1["AIProjectClient.get_openai_client().responses.create()"] --> T["execute_tool fetch_weather()"] --> I2["AIProjectClient.get_openai_client().responses.create()"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 (필수) |
-| `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--export` | `console` | `console` · `azure-monitor` |
-| `--content` | 끔 | 프롬프트 · 응답 · tool 인자를 span 에 기록 (개발 전용) |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
+| `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--question` | `What is the weather in Seoul, and should I take an umbrella?` | 질문 |
-| `--keep` | 끔 | agent 와 conversation 을 지우지 않고 남김 |
+| `--delete` | 끔 | 끝나고 agent · conversation 정리 |
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-  `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
+- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
   연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
   Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-- `--content` 는 사용자 메시지와 tool 인자를 텔레메트리에 그대로 넣습니다. 실습 외의 환경에서는 켜지 마세요.
+  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다 — 포털까지 가지 않고 모양만 볼 때 씁니다.
+- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_content_recording=False`). 켜는 인자를 두지 않은 것은
+  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
 - **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
   OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
 - 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
@@ -637,20 +633,23 @@ flowchart TB
   `gen_ai.operation.name = execute_tool` 을 직접 넣어야 옆의 모델 호출들과 나란히 tool 호출로 뜹니다.
 - tool 은 이 프로세스에서 돌기 때문에, 걸린 시간은 서비스 쪽 어디에도 남지 않습니다.
 - tool 은 **agent 정의**에 붙습니다. agent reference 와 tools 목록을 함께 실은 `responses.create()` 는 서비스가 거부합니다.
-- `--keep` 은 포털용입니다 — span 은 어느 쪽이든 exporter 에 도달하지만, 포털은 아직 존재하는 것만 목록에 올립니다.
-  남겨 두면 다음 실행이 그 위에 새 agent 버전을 쌓습니다.
+- 기본은 **남기는** 쪽입니다 — span 은 어느 쪽이든 exporter 에 도달하지만, 포털은 아직 존재하는 것만 목록에 올립니다.
+  남겨 두면 다음 실행이 그 위에 새 agent 버전을 쌓으므로, 실습을 끝낼 때 `--delete` 로 정리합니다.
 
 ```bash
-# 기본 : span 을 콘솔로
+# 기본 : Application Insights 로 보내고 agent 는 남기기
 python hol-foundry-observability-single.py \
   --endpoint "<foundry-project-endpoint>"
 
-# 포털에서 보기 : Application Insights 로 보내고 agent 도 남기기
+# span 모양만 터미널에서 보기
 python hol-foundry-observability-single.py \
   --endpoint "<foundry-project-endpoint>" \
-  --export azure-monitor \
-  --content \
-  --keep
+  --export console
+
+# 정리 : agent · conversation 삭제
+python hol-foundry-observability-single.py \
+  --endpoint "<foundry-project-endpoint>" \
+  --delete
 ```
 
 ---
@@ -673,20 +672,20 @@ flowchart TB
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 (필수) |
-| `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--export` | `console` | `console` · `azure-monitor` |
-| `--content` | 끔 | 프롬프트 · 응답을 span 에 기록 (개발 전용) |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
+| `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--task` | checkout p95 latency 회귀 시나리오 | 세 agent 에게 줄 과제 |
-| `--keep` | 끔 | agent 셋과 conversation 을 남김 |
+| `--delete` | 끔 | 끝나고 agent 셋 · conversation 정리 |
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-  `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
+- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
   연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
   Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-- `--content` 는 사용자 메시지를 텔레메트리에 그대로 넣습니다. 실습 외의 환경에서는 켜지 마세요.
+  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다 — 포털까지 가지 않고 모양만 볼 때 씁니다.
+- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_content_recording=False`). 켜는 인자를 두지 않은 것은
+  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
 - **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
   OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
 - 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
@@ -696,16 +695,15 @@ flowchart TB
 - root span 이 없으면 세 턴이 각자 trace 를 시작하고, 포털은 pipeline 하나가 아니라 무관한 호출 셋을 보여 줍니다.
 
 ```bash
-# 기본
+# 기본 : Application Insights 로 보내고 agent 는 남기기
 python hol-foundry-observability-multi.py \
   --endpoint "<foundry-project-endpoint>"
 
-# 다른 과제로, 포털에서 확인
+# 다른 과제로 돌리고, 끝나고 정리
 python hol-foundry-observability-multi.py \
   --endpoint "<foundry-project-endpoint>" \
   --task "배포 후 주문 API 오류율이 0.2%에서 7%로 올랐다. 원인과 대응을 정리해줘." \
-  --export azure-monitor \
-  --keep
+  --delete
 ```
 
 ---
@@ -731,20 +729,20 @@ flowchart TB
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 (필수) |
-| `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--export` | `console` | `console` · `azure-monitor` |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
+| `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--port` | `8099` | 로컬 agent 서버 포트 |
 | `--no-propagate` | 끔 | trace 헤더를 보내지 않음 (대조군) |
-| `--keep` | 끔 | agent 셋을 남김 |
+| `--delete` | 끔 | 끝나고 agent 셋 정리 |
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-  `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
+- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
   연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
   Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-- 다섯 스크립트 중 **이것만 `--content` 가 없습니다.** 판정에 필요한 것은 trace id 와 부모 span id 뿐이라 본문을 기록할 이유가 없습니다.
+  다만 **판정만 볼 거라면 `--export console` 이 빠릅니다** — hop 이 붙었는지 갈라졌는지는 아래 판정 줄로 바로 나옵니다.
+- 프롬프트 · 응답 본문은 기록하지 않습니다. 판정에 필요한 것은 trace id 와 부모 span id 뿐입니다.
 - **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
   OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
 - 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
@@ -788,20 +786,20 @@ flowchart TB
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 (필수) |
-| `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--export` | `console` | `console` · `azure-monitor` |
-| `--content` | 끔 | 프롬프트 · 응답 · tool 인자를 span 에 기록 (개발 전용) |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
+| `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--question` | `What is the weather in Seoul, and should I take an umbrella?` | 질문 |
 
 - 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
   위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-  `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고 2~5분 뒤 보입니다.
+- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고 2~5분 뒤 보입니다.
   연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
   Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-  다만 이때 올라가는 것은 **이 프로세스의 span** 입니다 — 아래 `--keep` 항목의 이유로 포털 Traces 에서 agent 행에 걸리지는 않습니다.
-- `--content` 는 사용자 메시지와 tool 인자를 텔레메트리에 그대로 넣습니다. 실습 외의 환경에서는 켜지 마세요.
+  다만 이때 올라가는 것은 **이 프로세스의 span** 입니다 — 아래 정리 항목의 이유로 포털 Traces 에서 agent 행에 걸리지는 않습니다.
+  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
+- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_sensitive_data=False`). 켜는 인자를 두지 않은 것은
+  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
 - 트레이싱 설정은 **무엇이 추적되기 전에 한 번** 끝나야 합니다. raw SDK 쪽처럼 `instrument()` 를 손으로 부르지는 않지만,
   provider 가 없는 상태에서 만들어진 span 이 조용히 사라지는 것은 똑같습니다.
 - 계측기를 세우는 코드가 없습니다. provider 만 있으면 Agent Framework 가 스스로 추적하고, `configure_otel_providers()` 가 그 provider 를 만듭니다.
@@ -809,7 +807,7 @@ flowchart TB
   signal 당 provider 는 하나뿐이라 둘이 함께 세울 수 없습니다.
 - tool 스키마는 함수 시그니처 · `Field` 설명 · docstring 에서 만들어집니다. 함수와 따로 관리할 JSON 스키마가 없습니다.
 - `@tool(approval_mode="never_require")` 는 트레이싱과 무관합니다. 빼면 호출마다 승인을 묻는데, 지켜보는 사람이 없는 스크립트는 답할 수 없습니다.
-- `--keep` 이 없습니다. 프레임워크는 모델 Deployment 에 직접 말하므로 **Foundry agent 가 만들어지지 않고**,
+- 정리할 것이 없어 `--delete` 가 없습니다. 프레임워크는 모델 Deployment 에 직접 말하므로 **Foundry agent 가 만들어지지 않고**,
   포털이 이 span 들을 걸어 둘 agent 행도 없습니다. 여기서 보이는 것은 이 프로세스의 span 입니다.
 - 전부 async 라 `azure.identity.aio` 쪽 credential 을 씁니다.
 
@@ -823,54 +821,3 @@ python hol-foundry-observability-single.py --endpoint "<foundry-project-endpoint
 python hol-foundry-observability-af-single.py --endpoint "<foundry-project-endpoint>"
 ```
 
----
-
-### hol-foundry-observability-af-multi.py
-
-[`hol-foundry-observability-multi.py`](#hol-foundry-observability-multipy) 와 같은 pipeline 을 `SequentialBuilder` 로 쓴 것입니다.
-달라지는 것은 **이것이 pipeline 이라는 사실을 누가 아느냐** 입니다. 앞에서는 이 파일이 `agent_to_agent_interaction` span 을 직접 열어야 했지만,
-여기서는 workflow 자체가 pipeline 이라 아무도 적지 않아도 구조가 trace 에 남습니다.
-
-```mermaid
-%%{init: {"theme": "neutral"}}%%
-flowchart TB
-    ROOT["Scenario: multi agent (root span)"] --> WF["workflow"]
-    WF --> R["invoke_agent researcher"]
-    WF --> A["invoke_agent analyst"]
-    WF --> W["invoke_agent writer"]
-```
-
-| 인자 | 기본값 | 설명 |
-|---|---|---|
-| `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 (필수) |
-| `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--export` | `console` | `console` · `azure-monitor` |
-| `--content` | 끔 | 프롬프트 · 응답을 span 에 기록 (개발 전용) |
-| `--task` | checkout p95 latency 회귀 시나리오 | 세 agent 에게 줄 과제 |
-
-- 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
-  위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-  `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고 2~5분 뒤 보입니다.
-  연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
-  Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-- `--content` 는 사용자 메시지를 텔레메트리에 그대로 넣습니다. 실습 외의 환경에서는 켜지 마세요.
-- 트레이싱 설정은 **무엇이 추적되기 전에 한 번** 끝나야 합니다. provider 가 없는 상태에서 만들어진 span 은 조용히 사라집니다.
-  `--export azure-monitor` 일 때는 Azure Monitor 가 provider 를 세우므로 프레임워크는 `enable_instrumentation()` 만 부릅니다 —
-  signal 당 provider 는 하나뿐이라 둘이 함께 세울 수 없습니다.
-- 대화를 넘기는 것도 workflow 입니다. 이 파일이 conversation id 를 들고 다니지 않습니다.
-- 출력은 마지막 agent 의 답뿐입니다. 중간 턴을 찍고 싶으면 `SequentialBuilder` 에 `intermediate_output_from` 을 줍니다 —
-  trace 에는 어느 쪽이든 `invoke_agent` span 으로 하나씩 남아 있고, 그것이 이 파일이 존재하는 이유입니다.
-- `af-single` 과 마찬가지로 Foundry agent 를 만들지 않으므로 `--keep` 이 없습니다.
-
-```bash
-# 기본
-python hol-foundry-observability-af-multi.py \
-  --endpoint "<foundry-project-endpoint>"
-
-# 포털에서 workflow span 트리 확인
-python hol-foundry-observability-af-multi.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --export azure-monitor \
-  --content
-```

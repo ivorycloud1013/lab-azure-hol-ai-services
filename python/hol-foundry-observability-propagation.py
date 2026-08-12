@@ -66,27 +66,20 @@ def parse_args():
         epilog="--no-propagate drops the headers, which is the control: every hop then "
                "starts its own trace.",
     )
-    parser.add_argument("--endpoint",
-                        default=os.getenv("FOUNDRY_PROJECT_ENDPOINT")
-                        or os.getenv("AZURE_AI_PROJECT_ENDPOINT"),
-                        help="Foundry project endpoint")
-    parser.add_argument("--deployment",
-                        default=os.getenv("FOUNDRY_MODEL_NAME")
-                        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.6-terra"),
-                        help="model deployment name")
-    parser.add_argument("--export", choices=["console", "azure-monitor"], default="console")
+    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
+    parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
+    parser.add_argument("--export", choices=["console", "azure-monitor"],
+                        default="azure-monitor")
     parser.add_argument("--port", type=int, default=8099)
     parser.add_argument("--no-propagate", action="store_true",
                         help="send no trace headers")
-    parser.add_argument("--keep", action="store_true",
-                        help="leave the three agents behind. The spans reach the exporter "
-                             "either way — this is for the portal, which lists agents that "
-                             "still exist. A kept run stacks a new version on the next pass.")
+    parser.add_argument("--delete", action="store_true",
+                        help="clean up the three agents on the way out. The spans reach the "
+                             "exporter either way — this is for the portal, which lists "
+                             "agents that still exist. Left in place, the next run stacks a "
+                             "new version on top.")
 
-    args = parser.parse_args()
-    if not args.endpoint:
-        parser.error("--endpoint or FOUNDRY_PROJECT_ENDPOINT is required")
-    return args
+    return parser.parse_args()
 
 
 def configure_tracing(args, project):
@@ -250,7 +243,7 @@ def main():
                 server.server_close()
 
         for agent in agents.values():
-            if args.keep:
+            if not args.delete:
                 print(f"  kept agent {agent.name} version {agent.version}")
                 continue
             try:
