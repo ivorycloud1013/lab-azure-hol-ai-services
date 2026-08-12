@@ -662,12 +662,7 @@ python hol-foundry-observability-single.py \
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    ROOT["Scenario: multi agent (root span)"] --> C["create_agent × 3"]
-    ROOT --> R["invoke_agent researcher"]
-    ROOT --> H1["agent_to_agent_interaction"]
-    ROOT --> A["invoke_agent analyst"]
-    ROOT --> H2["agent_to_agent_interaction"]
-    ROOT --> W["invoke_agent writer"]
+    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: multi agent') 설정"] --> C["AIProjectClient.agents.create_version() × 3"] --> R["AIProjectClient.get_openai_client().responses.create() </br> researcher"] --> H1["span('agent_to_agent_interaction')"] --> A["AIProjectClient.get_openai_client().responses.create() </br> analyst"] --> H2["span('agent_to_agent_interaction')"] --> W["AIProjectClient.get_openai_client().responses.create() </br> writer"]
 ```
 
 | 인자 | 기본값 | 설명 |
