@@ -32,12 +32,13 @@ LAB_INDEXES = ("housing", "merchants", "news")
 
 # Every query type but simple and semantic asks Search to embed the question, which
 # only works when the index carries a vectorizer on its vector profile. The lab
-# indexes embed at upload time and have none, so the vector types return an error
-# there — the vectors are still searchable, just not from this tool.
-QUERY_TYPES = ("simple", "semantic", "vector", "vector_simple_hybrid", "vector_semantic_hybrid")
-DEFAULT_QUERY_TYPE = "semantic"
+# indexes embed at upload time and have none, so the vector types would only return
+# an error here — the vectors are still searchable, just not from this tool. That
+# leaves semantic as the best this lab can do, so it is fixed rather than offered.
+QUERY_TYPE = "semantic"
 
-DEFAULT_TOP_K = 5
+# How many documents Search puts in front of the model.
+TOP_K = 5
 
 # Output items that are neither the answer nor the model thinking about it — one
 # per search the agent ran.
@@ -51,7 +52,9 @@ def parse_args():
                f"{', '.join(LAB_INDEXES)} indexes this reads. The agent searches as the project "
                "identity through a project connection, so the project needs Search Index Data "
                "Reader on the service, not you. --endpoint is the project endpoint, "
-               "https://<resource>.ai.azure.com/api/projects/<project>.",
+               "https://<resource>.ai.azure.com/api/projects/<project>. "
+               "The agent outlives the run unless --delete, so hol-foundry-tools-voice.py "
+               "--agent-name can then ask the same knowledge the same things out loud.",
     )
     parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
     parser.add_argument("--deployment", default="gpt-5.6-terra", help="model deployment name")
@@ -67,15 +70,8 @@ def parse_args():
     knowledge.add_argument("--bing-connection", metavar="NAME",
                            help="project connection to Grounding with Bing Search, to answer from "
                                 "the public web as well — no default, connections vary by project")
-
-    search = parser.add_argument_group("how the index is queried")
-    search.add_argument("--query-type", choices=QUERY_TYPES, default=DEFAULT_QUERY_TYPE,
-                        help=f"(default {DEFAULT_QUERY_TYPE}; the vector types need a vectorizer "
-                             "on the index, which the lab indexes do not have)")
-    search.add_argument("--top-k", type=int, default=DEFAULT_TOP_K,
-                        help=f"documents to put in front of the model (default {DEFAULT_TOP_K})")
-    search.add_argument("--filter", metavar="ODATA",
-                        help="OData filter applied to every search, e.g. \"category eq '기술'\"")
+    knowledge.add_argument("--filter", metavar="ODATA",
+                           help="OData filter applied to every search, e.g. \"category eq '기술'\"")
 
     parser.add_argument("--agent-name", default=DEFAULT_AGENT_NAME,
                         help=f"agent to create a version of (default {DEFAULT_AGENT_NAME})")
@@ -92,8 +88,6 @@ def parse_args():
         parser.error("attach at least one source with --index or --bing-connection")
     if args.search_connection and not args.index:
         parser.error("--search-connection needs an --index to read")
-    if args.top_k < 1:
-        parser.error("--top-k must be at least 1")
     return args
 
 
@@ -124,11 +118,11 @@ def build_search_tool(project, args):
     index = AISearchIndexResource(
         project_connection_id=connection_id,
         index_name=args.index,
-        query_type=args.query_type,
-        top_k=args.top_k,
+        query_type=QUERY_TYPE,
+        top_k=TOP_K,
         filter=args.filter,
     )
-    print(f"grounding on index {args.index} ({args.query_type}, top {args.top_k})")
+    print(f"grounding on index {args.index} ({QUERY_TYPE}, top {TOP_K})")
     # One index resource per agent is the service limit, so this list never grows.
     return AzureAISearchTool(azure_ai_search=AzureAISearchToolResource(indexes=[index]))
 
@@ -156,8 +150,8 @@ def create_version(project, args):
     """A prompt agent is declarative — model, instructions and knowledge live in
     the service, which retrieves and answers on its own.
 
-    A new version every run, because the index, query type and filter are part of
-    the definition and this script exists to let you change them and compare.
+    A new version every run, because the index and the filter are part of the
+    definition and this script exists to let you change them and compare.
     """
     agent = project.agents.create_version(
         agent_name=args.agent_name,
