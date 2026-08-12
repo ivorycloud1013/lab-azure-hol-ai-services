@@ -346,8 +346,21 @@ python hol-foundry-agents-hosted.py \
   --port 8088
 
 # 배포하고 물어보기
-make deploy FILE="assets/tools/KB주택시장리뷰_2025년 10월호.md"
-make invoke QUESTION="2025년 10월 전세 시장을 요약해줘."
+# 0. 사전 준비 (1회)
+az login && azd auth login
+azd ext install microsoft.foundry
+
+export AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
+export AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5.6-terra"
+
+# 1. 배포 전 로컬 확인 (Azure 자원 소비 없음)
+make ask-local FILE="assets/agents/2026 휴식이 있는 캘린더.md"
+
+# 2. 기존 Foundry 프로젝트에 배포
+make deploy FILE="assets/agents/2026 휴식이 있는 캘린더.md"
+
+# 3. 배포된 에이전트에 질문
+make invoke QUESTION="단체휴가는 언제인가요?"
 ```
 
 ## Foundry IQ & Tools
@@ -373,7 +386,7 @@ flowchart TB
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--endpoint` | (필수) | Foundry content understanding 엔드포인트 |
 | `--file` | (필수) | 분석할 문서, 여러 개면 반복 지정 |
 | `--analyzer` | `prebuilt-document` | 이미 있는 analyzer id |
 | `--out-dir` | 원본 문서 옆 | `.md` · `.json` 출력 디렉터리 |
@@ -382,13 +395,13 @@ flowchart TB
 ```bash
 # 기본 : prebuilt-document 로 markdown 뽑기
 python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-project-endpoint>" \
+  --endpoint "<foundry-content-understanding-endpoint>" \
   --file "assets/agents/2026 휴식이 있는 캘린더.pdf" \
   --out-dir assets/tools
 
 # 다른 prebuilt analyzer 로 : 레이아웃만 (모델 배포 불필요)
 python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-project-endpoint>" \
+  --endpoint "<foundry-content-understanding-endpoint>" \
   --analyzer prebuilt-layout \
   --file "assets/agents/하도급거래 공정화에 관한 법률(법률)(제21060호)(20251217).pdf" \
   --out-dir assets/tools
@@ -495,14 +508,14 @@ flowchart TB
 | 인자 | 기본값 | 설명 |
 |---|---|---|
 | `--endpoint` | (필수) | Foundry **계정** 엔드포인트 (`https://<resource>.cognitiveservices.azure.com`) |
-| `--model` | `gpt-realtime` | 대화할 realtime 모델 |
+| `--model` | `gpt-realtime-2` | 대화할 realtime 모델 |
 | `--project-endpoint` | — | 여기에 agent 를 만들어 대화 (`https://<resource>.services.ai.azure.com/api/projects/<project>`) |
 | `--deployment` | `gpt-5.6-terra` | 만들어질 agent 가 쓸 모델 Deployment |
 | `--agent-name` | 만들 때 `hol-voice-agent` | 만들 agent 이름, 또는 이미 있는 agent 이름 |
 | `--project-name` | — | `--agent-name` 이 있는 project (`--project-endpoint` 없을 때) |
 | `--delete` | 끔 | `--project-endpoint` 로 만든 agent 를 끝나고 삭제 |
 | `--seconds` | — | N 초 뒤 종료 (없으면 Ctrl+C 까지) |
-| `--voice` | `en-US-AvaMultilingualNeural` | Azure voice |
+| `--voice` | `en-US-Ava:DragonHDLatestNeural` | Azure voice |
 | `--language` | 자동 감지 | 입력 음성 언어, 예 `ko-KR` |
 | `--instructions` | 랩 기본 프롬프트 | 어시스턴트 역할 재정의 |
 

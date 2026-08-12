@@ -29,7 +29,7 @@ INSTRUCTIONS = (
     "Answer in the language you were spoken to."
 )
 
-DEFAULT_MODEL = "gpt-realtime"
+DEFAULT_MODEL = "gpt-realtime-2"
 
 # What --project-endpoint creates. The agent holds the instructions, so the voice
 # session sends none of its own and the same agent answers over any other channel.
@@ -40,7 +40,7 @@ DEFAULT_AGENT_DEPLOYMENT = "gpt-5.6-terra"
 # trailing name rather than the URL.
 PROJECT_PATH_MARKER = "/api/projects/"
 
-DEFAULT_VOICE = "en-US-AvaMultilingualNeural"
+DEFAULT_VOICE = "en-US-Ava:DragonHDLatestNeural"
 
 # What pcm16 output comes back as. The other output formats exist, but this script
 # only asks for the default one.
