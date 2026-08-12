@@ -9,26 +9,22 @@ from azure.core.exceptions import ResourceNotFoundError
 import identity
 
 INSTRUCTIONS = (
-    "You answer questions about live Azure telemetry and application data by calling the "
-    "MCP tools attached to you. List the tools you have before assuming something is out of "
-    "reach, and name the tool and the resource each fact came from. "
+    "You answer questions by calling the MCP tools attached to you and from nothing else. "
+    "List the tools you have before assuming something is out of reach, and name the tool and "
+    "the source each fact came from. "
     "Say you could not find it rather than guessing. Answer in the language of the question."
 )
 
 DEFAULT_AGENT_NAME = "hol-mcp-ops"
 
-# Azure Managed Grafana serves a managed MCP endpoint on every workspace — nothing
-# to deploy. The audience is fixed by the service, not by the workspace.
-GRAFANA_MCP_PATH = "/api/azure-mcp"
-GRAFANA_AUDIENCE = "https://dashboard.azure.com"
-
-# The Cosmos DB MCP Toolkit is not managed — it is a container app you deploy from
-# github.com/AzureCosmosDB/MCPToolKit, and its audience is the Entra app that
-# deployment registers. deployment-info.json holds both values.
-COSMOS_MCP_PATH = "/mcp"
+# Microsoft Learn serves a public MCP endpoint — nothing to deploy, no credential to
+# present, and the service reaches it over the internet rather than through this
+# lab's network. It is the one server every run of this script can count on.
+LEARN_MCP_URL = "https://learn.microsoft.com/api/mcp"
+LEARN_DESCRIPTION = "Microsoft Learn — official Azure and Microsoft product documentation"
 
 # Every tool call would otherwise stop and wait for a human. A lab answering its own
-# questions on the terminal has nobody to ask, and both servers here are read-only.
+# questions on the terminal has nobody to ask, and Learn is read-only.
 APPROVAL_NEVER = "never"
 
 MCP_OUTPUT_TYPES = ("mcp_list_tools", "mcp_call", "mcp_approval_request")
@@ -37,11 +33,12 @@ MCP_OUTPUT_TYPES = ("mcp_list_tools", "mcp_call", "mcp_approval_request")
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Attach remote MCP servers to a Foundry prompt agent and ask it questions.",
-        epilog="--grafana and --cosmos are presets over --mcp. Those three hand the agent your "
-               "own Entra token, so you need the role on the target yourself and the version "
-               "stops working when the token expires. --connection points at a connection the "
-               "project already holds, which authenticates as the project identity and keeps "
-               "working — mix the two freely. --endpoint is the project endpoint, "
+        epilog="--learn is the only server this lab reaches with no setup at all — it is public "
+               "and unauthenticated. --mcp with an audience hands the agent your own Entra token "
+               "instead, so you need the role on the target yourself and the version stops "
+               "working when that token expires. --connection points at a connection the project "
+               "already holds, which authenticates as the project identity and keeps working — "
+               "mix the three freely. --endpoint is the project endpoint, "
                "https://<resource>.ai.azure.com/api/projects/<project>.",
     )
     parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
@@ -49,13 +46,9 @@ def parse_args():
 
     identity.add_auth_arguments(parser)
 
-    servers = parser.add_argument_group("MCP servers, repeat any of them")
-    servers.add_argument("--grafana", action="append", default=[], metavar="HOSTNAME",
-                         help="Azure Managed Grafana workspace hostname, "
-                              "e.g. my-grafana-abc.eastus.grafana.azure.com — hostname only")
-    servers.add_argument("--cosmos", action="append", default=[], metavar="URL=AUDIENCE",
-                         help="Cosmos DB MCP Toolkit container app URL and the audience of the "
-                              "Entra app it was deployed with, both from deployment-info.json")
+    servers = parser.add_argument_group("MCP servers")
+    servers.add_argument("--learn", action="store_true",
+                         help="attach the public Microsoft Learn MCP server")
     servers.add_argument("--mcp", action="append", default=[], metavar="LABEL=URL[=AUDIENCE]",
                          help="any other remote MCP server, unauthenticated without an audience")
     servers.add_argument("--connection", action="append", default=[], metavar="LABEL=CONNECTION_ID",
@@ -79,8 +72,8 @@ def parse_args():
         parser.error(f"--auth {args.auth} is not supported by the projects SDK, use another method")
     if args.allowed_tool and args.read_only:
         parser.error("--allowed-tool names tools and --read-only filters them, pass only one")
-    if not (args.grafana or args.cosmos or args.mcp or args.connection):
-        parser.error("attach at least one server with --grafana, --cosmos, --mcp or --connection")
+    if not (args.learn or args.mcp or args.connection):
+        parser.error("attach at least one server with --learn, --mcp or --connection")
     return args
 
 
@@ -93,36 +86,10 @@ def split_option(value, option, shape):
     return fields
 
 
-def label_for(name, index):
-    """Server labels have to be unique, and the common case is one server per kind."""
-    return f"{name}-{index}" if index else name
-
-
-def ends_with_path(url, path):
-    return url.rstrip("/") + ("" if url.rstrip("/").endswith(path) else path)
-
-
-def grafana_specs(hostnames):
-    return [
-        {"label": label_for("grafana", index),
-         "url": f"https://{hostname.strip('/')}{GRAFANA_MCP_PATH}",
-         "audience": GRAFANA_AUDIENCE,
-         "description": "Azure Managed Grafana — Azure resources, metrics, logs and dashboards"}
-        for index, hostname in enumerate(hostnames)
-    ]
-
-
-def cosmos_specs(values):
-    specs = []
-    for index, value in enumerate(values):
-        url, audience = split_option(value, "--cosmos", "URL=AUDIENCE")
-        specs.append({
-            "label": label_for("cosmos", index),
-            "url": ends_with_path(url, COSMOS_MCP_PATH),
-            "audience": audience,
-            "description": "Azure Cosmos DB — databases, documents, schema and vector search",
-        })
-    return specs
+def learn_spec():
+    """No audience, because the server asks for no credential."""
+    return {"label": "learn", "url": LEARN_MCP_URL, "audience": None,
+            "description": LEARN_DESCRIPTION}
 
 
 def mcp_specs(values):
@@ -146,7 +113,7 @@ def connection_specs(values):
 
 def build_specs(args):
     """One flat list of servers, whichever option each of them arrived on."""
-    return (grafana_specs(args.grafana) + cosmos_specs(args.cosmos)
+    return (([learn_spec()] if args.learn else [])
             + mcp_specs(args.mcp) + connection_specs(args.connection))
 
 
@@ -160,7 +127,7 @@ def get_tool_filter(args):
 
 
 def get_token(credential, audience, cache):
-    """One token per audience — several Grafana workspaces share the audience."""
+    """One token per audience — several servers can share one."""
     if audience not in cache:
         cache[audience] = credential.get_token(f"{audience.rstrip('/')}/.default").token
     return cache[audience]
@@ -200,9 +167,9 @@ def create_version(project, args, specs, credential):
     """A prompt agent is declarative — model, instructions and servers live in the
     service, and it calls the servers itself. Nothing runs in this process.
 
-    A new version every run, because --auth-mode token writes a bearer token into
-    the definition and that token expires within the hour. Versions are cheap, and
-    the alternative is an agent that starts failing on its second day.
+    A new version every run, because a server given an audience has a bearer token
+    written into the definition and that token expires within the hour. Versions are
+    cheap, and the alternative is an agent that starts failing on its second day.
     """
     agent = project.agents.create_version(
         agent_name=args.agent_name,
@@ -249,7 +216,7 @@ def ask(client, conversation_id, question, show_tools):
 
 def main():
     args = parse_args()
-    # Before the first network call, so a malformed --cosmos or --mcp fails on the spot.
+    # Before the first network call, so a malformed --mcp fails on the spot.
     specs = build_specs(args)
     credential = identity.get_credential(args)
     project = AIProjectClient(endpoint=args.endpoint, credential=credential)
