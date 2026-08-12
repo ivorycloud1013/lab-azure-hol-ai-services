@@ -64,8 +64,6 @@ python hol-foundry-models-llm.py \
   --user "Azure Private Endpoint 를 세 문장으로 설명해줘."
 ```
 
----
-
 ### hol-foundry-models-vlm.py
 
 텍스트 프롬프트와 이미지를 보내고 응답을 받습니다.
@@ -113,8 +111,6 @@ python hol-foundry-models-vlm.py \
   --image assets/models/style-001.jpg
 ```
 
----
-
 ### hol-foundry-models-stt_tts.py
 
 Azure Speech로 텍스트를 소리로(TTS), 소리를 텍스트로(STT) 바꿉니다.
@@ -159,8 +155,6 @@ python hol-foundry-models-stt_tts.py \
   --tts-input "..."
 ```
 
----
-
 ### hol-foundry-models-optimize-reasoning.py
 
 Responses API의 조절 옵션을 하나씩 실행하고, 그때마다 `usage`를 찍어 줍니다.
@@ -188,8 +182,6 @@ python hol-foundry-models-optimize-reasoning.py \
   --endpoint "<foundry-aoai-endpoint>" \
   --deployment "<model-deployment-name>"
 ```
-
----
 
 ### hol-foundry-models-optimize-token.py
 
@@ -271,8 +263,6 @@ python hol-foundry-agents-prompt.py \
   --delete
 ```
 
----
-
 ### hol-foundry-agents-responses.py
 
 로컬 Agent 를 구축하여 OpenAI Responses API 를 사용합니다. Tool calling 시에 RAG pipeline 을 위해 `grep` · `sed` 로 로컬 파일을 읽어 결과를 돌려 줍니다.
@@ -301,8 +291,6 @@ python hol-foundry-agents-responses.py \
   --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" \
   --question "월세 지수는 어떻게 움직였어?"
 ```
-
----
 
 ### hol-foundry-agents-hosted.py
 
@@ -406,8 +394,6 @@ python hol-foundry-tools-content-understanding.py \
   --out-dir assets/tools
 ```
 
----
-
 ### hol-foundry-tools-knowledge.py
 
 Azure AI Search 인덱스(그리고 선택적으로 Bing)를 prompt agent 의 knowledge 으로 연결합니다.
@@ -448,8 +434,6 @@ python hol-foundry-tools-knowledge.py \
   --question "최근 기술 뉴스 흐름을 정리해줘."
 ```
 
----
-
 ### hol-foundry-tools-mcp.py
 
 원격 MCP 서버를 prompt agent 의 tool 로 선언합니다.
@@ -464,19 +448,15 @@ flowchart TB
 |---|---|---|
 | `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--mcp` | — | `LABEL=URL` 또는 `LABEL=URL=AUDIENCE`, 반복 가능 |
-| `--connection` | — | `LABEL=CONNECTION_ID`, project 가 이미 가진 연결, 반복 가능 |
-| `--allowed-tool` | — | 모든 서버를 이 이름의 도구로 제한, 반복 가능 |
-| `--read-only` | 끔 | 서버가 read-only 로 표시한 도구만 허용 |
+| `--mcp` | (필수) | `LABEL=URL` 또는 `LABEL=URL=AUDIENCE`, 반복 가능 |
 | `--agent-name` | `hol-mcp-ops` | 버전을 만들 agent 이름 |
 | `--question` | (필수) | 질문, 반복하면 같은 대화에서 이어 묻기 |
 | `--show-tools` | 끔 | 발견한 도구 목록과 호출 내역 출력 |
 | `--delete` | 끔 | 끝나고 agent 삭제 |
 
-- `--mcp` · `--connection` 중 **최소 하나**는 있어야 하고, 섞어 써도 됩니다.
-- 인증 방식이 셋의 차이입니다 — `AUDIENCE` 없는 `--mcp` 는 공개·무인증(예: Microsoft Learn), `AUDIENCE` 를 준 `--mcp` 는 **내 Entra 토큰**을 정의에 심어 두므로 토큰이 만료되면 그 버전은 동작을 멈추고, `--connection` 은 project identity 로 인증해 계속 동작합니다.
+- `AUDIENCE` 유무가 인증의 차이입니다 — 없으면 공개·무인증(예: Microsoft Learn), 주면 **내 Entra 토큰**을 agent 정의에 심어 두므로 토큰이 만료되면 그 버전은 동작을 멈춥니다.
 - 그래서 실행할 때마다 새 버전을 만듭니다.
-- `--allowed-tool` 과 `--read-only` 는 함께 쓸 수 없습니다.
+- 서버를 부르는 것은 이 프로세스가 아니라 **서비스**입니다. 정의에 URL 만 넣어 두면 Foundry 가 직접 나가므로, 그 URL 이 서비스 쪽에서 닿아야 합니다.
 - 도구 호출 승인은 `never` 입니다 — 터미널에서 자문자답하는 랩에는 승인해 줄 사람이 없으니, 읽기 전용 서버와 함께 쓰세요.
 - `--auth api-key` · `--auth access-token` 은 projects SDK 가 지원하지 않습니다.
 
@@ -494,18 +474,14 @@ python hol-foundry-tools-mcp.py \
   --show-tools \
   --question "Foundry Agent Service 의 지원 리전을 알려줘."
 
-# 여러 서버 함께 붙이기 + 읽기 전용 제한
+# 여러 서버 함께 붙이기 : 두 번째는 Entra 토큰이 필요한 내부 서버
 python hol-foundry-tools-mcp.py \
   --endpoint "<foundry-project-endpoint>" \
   --mcp "learn=https://learn.microsoft.com/api/mcp" \
   --mcp "myapi=https://<my-mcp-host>/mcp=https://<my-api-audience>" \
-  --connection "internal=<project-connection-id>" \
-  --read-only \
   --question "두 소스를 비교해서 정리해줘." \
   --delete
 ```
-
----
 
 ### hol-foundry-tools-voice.py
 
@@ -605,7 +581,7 @@ agent 하나가 tool 하나를 부르는 가장 짧은 실행입니다. tool loo
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: single agent') 설정"] --> C["AIProjectClient.agents.create_version()"] --> I1["AIProjectClient.get_openai_client().responses.create()"] --> T["execute_tool fetch_weather()"] --> I2["AIProjectClient.get_openai_client().responses.create()"]
+    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: single agent')"] --> C["AIProjectClient.agents.create_version()"] --> I1["AIProjectClient.get_openai_client().responses.create()"] --> T["execute_tool fetch_weather()"] --> I2["AIProjectClient.get_openai_client().responses.create()"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -615,56 +591,20 @@ flowchart TB
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--delete` | 끔 | 끝나고 agent · conversation 정리 |
 
-- 질문은 `QUESTION` 상수로 고정되어 있습니다(서울 날씨와 우산). 이 스크립트가 보여 주려는 것은 답이 아니라
-  **span 이 어떻게 남는가** 이므로, 매번 같은 것을 물어 trace 끼리 비교할 수 있게 했습니다.
-
-- 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
-  위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
-  연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
-  Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다 — 포털까지 가지 않고 모양만 볼 때 씁니다.
-- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_content_recording=False`). 켜는 인자를 두지 않은 것은
-  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
-- **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
-  OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
-- 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
-  azure-core 클라이언트보다 먼저 와야 합니다. 빠뜨려도 실행은 멀쩡해 보이고, SDK 가 그리는 `create_agent` · `invoke_agent` span 만 없습니다.
-- tool span 은 `@trace_function` 이 아니라 손으로 엽니다. 데코레이터는 이 호출을 **코드**로 기록해서
-  포털 Traces 가 분류할 카테고리를 찾지 못하고 "other" 로 보여 줍니다.
-  `gen_ai.operation.name = execute_tool` 을 직접 넣어야 옆의 모델 호출들과 나란히 tool 호출로 뜹니다.
-- tool 은 이 프로세스에서 돌기 때문에, 걸린 시간은 서비스 쪽 어디에도 남지 않습니다.
-- tool 은 **agent 정의**에 붙습니다. agent reference 와 tools 목록을 함께 실은 `responses.create()` 는 서비스가 거부합니다.
-- 기본은 **남기는** 쪽입니다 — span 은 어느 쪽이든 exporter 에 도달하지만, 포털은 아직 존재하는 것만 목록에 올립니다.
-  남겨 두면 다음 실행이 그 위에 새 agent 버전을 쌓으므로, 실습을 끝낼 때 `--delete` 로 정리합니다.
-
 ```bash
-# 기본 : Application Insights 로 보내고 agent 는 남기기
+# 기본
 python hol-foundry-observability-single.py \
   --endpoint "<foundry-project-endpoint>"
-
-# span 모양만 터미널에서 보기
-python hol-foundry-observability-single.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --export console
-
-# 정리 : agent · conversation 삭제
-python hol-foundry-observability-single.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --delete
 ```
-
----
 
 ### hol-foundry-observability-multi.py
 
-같은 설정에 agent 를 셋으로 늘린 것입니다. 서비스 입장에서는 **서로 무관한 호출 세 번**이고,
-이것이 하나의 pipeline 이라는 사실은 이 파일만 압니다. `agent_to_agent_interaction` span 이 그 사실을 trace 에 적어 넣는 자리입니다.
+`hol-foundry-observability-single.py` 에서 agent 를 3개로 늘린 것입니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: multi agent') 설정"] --> C["AIProjectClient.agents.create_version() × 3"] --> R["AIProjectClient.get_openai_client().responses.create() </br> researcher"] --> H1["span('agent_to_agent_interaction')"] --> A["AIProjectClient.get_openai_client().responses.create() </br> analyst"] --> H2["span('agent_to_agent_interaction')"] --> W["AIProjectClient.get_openai_client().responses.create() </br> writer"]
+    SETUP["Exporter 설정"] --> INST["AIProjectInstrumentor().instrument()"] --> ROOT["span('Scenario: multi agent')"] --> C["AIProjectClient.agents.create_version() × 3"] --> R["AIProjectClient.get_openai_client().responses.create() </br> researcher"] --> H1["span('agent_to_agent_interaction')"] --> A["AIProjectClient.get_openai_client().responses.create() </br> analyst"] --> H2["span('agent_to_agent_interaction')"] --> W["AIProjectClient.get_openai_client().responses.create() </br> writer"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -673,51 +613,15 @@ flowchart TB
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--delete` | 끔 | 끝나고 agent 셋 · conversation 정리 |
-
-- 과제는 `TASK` 상수로 고정되어 있습니다(checkout p95 latency 회귀). 이 스크립트가 보여 주려는 것은 답이 아니라
-  **세 호출이 하나의 trace 로 묶이는가** 이므로, 매번 같은 것을 물어 trace 끼리 비교할 수 있게 했습니다.
-
-- 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
-  위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
-  연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
-  Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다 — 포털까지 가지 않고 모양만 볼 때 씁니다.
-- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_content_recording=False`). 켜는 인자를 두지 않은 것은
-  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
-- **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
-  OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
-- 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
-  azure-core 클라이언트보다 먼저 와야 합니다. 빠뜨려도 실행은 멀쩡해 보이고, SDK 가 그리는 `create_agent` · `invoke_agent` span 만 없습니다.
-- `researcher` → `analyst` → `writer` 가 **conversation 하나**를 공유합니다. 앞 agent 가 한 말은 대화가 들고 있으므로,
-  뒤 agent 의 instructions 에 다시 적어 넣지 않습니다 — 그러면 이미 읽을 수 있는 것을 입력 토큰 주고 알려 주는 셈이 됩니다.
-- root span 이 없으면 세 턴이 각자 trace 를 시작하고, 포털은 pipeline 하나가 아니라 무관한 호출 셋을 보여 줍니다.
-
 ```bash
-# 기본 : Application Insights 로 보내고 agent 는 남기기
+# 기본
 python hol-foundry-observability-multi.py \
   --endpoint "<foundry-project-endpoint>"
-
-# span 모양만 터미널에서 보기
-python hol-foundry-observability-multi.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --export console
-
-# 정리 : agent 셋 · conversation 삭제
-python hol-foundry-observability-multi.py \
-  --endpoint "<foundry-project-endpoint>" \
-  --delete
 ```
-
----
 
 ### hol-foundry-observability-propagation.py
 
-여기까지는 전부 한 프로세스 안이었고, trace 가 이어진 것은 OpenTelemetry 의 context 가 context variable 이라 그냥 상속됐기 때문입니다.
-그건 전파(propagation)가 아닙니다. agent 를 **HTTP 로 부르는 순간** context 는 따라가지 않고, task 하나당 trace 하나가 아니라 서비스 하나당 trace 하나가 됩니다.
-
-이 스크립트는 세 agent 를 백그라운드 스레드의 로컬 HTTP 서버로 서빙해서, 호출이 실제로 소켓을 건너게 만듭니다.
-핸들러는 요청이 만든 스레드에서 **아무 context 없이** 시작하므로 실험이 성립합니다.
+하나의 HTTP Server 에서 서로 다른 API 를 가지는 agent 간에 propagation tracing 합니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
@@ -734,26 +638,6 @@ flowchart TB
 | `--no-propagate` | 끔 | trace 헤더를 보내지 않음 (대조군) |
 | `--delete` | 끔 | 끝나고 agent 셋 정리 |
 
-- 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
-  위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고, 그때서야 **Foundry 포털 > Traces** 에 뜹니다 — 2~5분 걸립니다.
-  연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
-  Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-  다만 **판정만 볼 거라면 `--export console` 이 빠릅니다** — hop 이 붙었는지 갈라졌는지는 아래 판정 줄로 바로 나옵니다.
-- 프롬프트 · 응답 본문은 기록하지 않습니다. 판정에 필요한 것은 trace id 와 부모 span id 뿐입니다.
-- **exporter 를 먼저 세우고 `instrument()` 를 나중에** 호출합니다.
-  OpenTelemetry 는 no-op provider 로 시작하고, 거기 넘긴 span 은 **오류 없이 사라지기** 때문입니다.
-- 같은 이유로 `settings.tracing_implementation = "opentelemetry"` 와 `AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING=true` 가
-  azure-core 클라이언트보다 먼저 와야 합니다. 빠뜨려도 실행은 멀쩡해 보이고, SDK 가 그리는 `create_agent` · `invoke_agent` span 만 없습니다.
-- **그대로 한 번, `--no-propagate` 로 한 번** 실행해 보세요. 끝에 찍히는 판정이 `joined` ↔ `SEPARATE` 로 뒤집힙니다.
-- 서버는 헤더 키를 **소문자로 낮춘 뒤** `extract()` 에 넘깁니다. HTTP 헤더 이름은 대소문자를 가리지 않고 urllib 은 `Traceparent` 로 보내지만,
-  기본 getter 는 dict 에서 소문자 이름을 그대로 찾습니다. 받은 그대로 넘기면 **아무 오류 없이** 못 찾고, 매 hop 이 자기 trace 를 시작합니다.
-- `session.id` 를 baggage 에 한 번 담아 두면 손으로 넘기지 않아도 모든 서비스에 도착합니다.
-- `--export azure-monitor` 는 `sampling_ratio=1.0` 으로 고정합니다. 샘플러가 trace 를 버리면 단지 안 보이는 것으로 끝나지 않고,
-  span 이 `NonRecordingSpan` 이 되면서 SDK 계측기가 `.attributes` 를 읽다 죽습니다.
-- 이것은 `AZURE_TRACING_GEN_AI_*` 전파와 다릅니다 — 그건 SDK 가 Foundry 로 보내는 요청에만 도장을 찍습니다.
-  **내 서비스 사이**를 잇는 것은 `inject` · `extract` 이고, 그 밖의 값을 나르는 것은 baggage 입니다.
-
 ```bash
 # 전파 켬 : 세 hop 이 하나의 trace 로
 python hol-foundry-observability-propagation.py \
@@ -765,23 +649,14 @@ python hol-foundry-observability-propagation.py \
   --no-propagate
 ```
 
----
-
 ### hol-foundry-observability-af-single.py
 
-[`hol-foundry-observability-single.py`](#hol-foundry-observability-singlepy) 와 같은 실행을 Agent Framework 로 쓴 것입니다.
-달라지는 것은 **tool loop 를 누가 도느냐** 입니다. 여기서는 `agent.run()` 이 그 loop 를 소유하므로,
-질문 하나가 `invoke_agent` span 하나가 되고 tool span 이 그 **자식**으로 들어갑니다.
+[`hol-foundry-observability-single.py`](#hol-foundry-observability-singlepy) 을 Microsoft Agent Framework 로 실행합니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
-    SETUP["Exporter 설정"] --> INST["configure_otel_providers() </br> or enable_instrumentation()"] --> AG["Agent(client=FoundryChatClient(...))"] --> ROOT["span('Scenario: single agent') 설정"] --> RUN["Agent.run()"]
-    subgraph LOOP["Agent.run() 이 도는 tool loop — 전부 invoke_agent span 의 자식"]
-        direction TB
-        CH1["chat"] --> T["execute_tool fetch_weather()"] --> CH2["chat"]
-    end
-    RUN --> CH1
+    SETUP["Exporter 설정"] --> INST["configure_otel_providers() </br> or enable_instrumentation()"] --> AG["Agent(client=FoundryChatClient())"] --> ROOT["span('Scenario: single agent') 설정"] --> RUN["Agent.run()"]
 ```
 
 | 인자 | 기본값 | 설명 |
@@ -790,35 +665,8 @@ flowchart TB
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 
-- 질문은 `QUESTION` 상수로 고정되어 있습니다 — [`hol-foundry-observability-single.py`](#hol-foundry-observability-singlepy) 와
-  **같은 질문**이라, 두 파일을 나란히 돌리면 차이가 span 트리 모양에서만 납니다.
-- 이 스크립트는 [`identity.py`](identity.py) 를 쓰지 않습니다. `DefaultAzureCredential` 고정이라
-  위의 **공통 인증** 인자(`--auth` 등)가 없고, `az login` 만 해 두면 됩니다.
-- `--export azure-monitor` 는 project 에 연결된 Application Insights 로 보내고 2~5분 뒤 보입니다.
-  연결 문자열은 project 에게 물어보므로(`project.telemetry.get_application_insights_connection_string()`) 따로 복사해 둘 것이 없고,
-  Application Insights 가 연결되지 않은 project 에서는 이 지점에서 실패합니다.
-  다만 이때 올라가는 것은 **이 프로세스의 span** 입니다 — 아래 정리 항목의 이유로 포털 Traces 에서 agent 행에 걸리지는 않습니다.
-  `--export console` 은 span 을 터미널에 그대로 찍고 비용이 들지 않습니다.
-- 프롬프트 · 응답 본문은 기록하지 않습니다(`enable_sensitive_data=False`). 켜는 인자를 두지 않은 것은
-  이 랩이 공용 Application Insights 로 내보내기 때문입니다.
-- 트레이싱 설정은 **무엇이 추적되기 전에 한 번** 끝나야 합니다. raw SDK 쪽처럼 `instrument()` 를 손으로 부르지는 않지만,
-  provider 가 없는 상태에서 만들어진 span 이 조용히 사라지는 것은 똑같습니다.
-- 계측기를 세우는 코드가 없습니다. provider 만 있으면 Agent Framework 가 스스로 추적하고, `configure_otel_providers()` 가 그 provider 를 만듭니다.
-  `--export azure-monitor` 일 때는 Azure Monitor 가 provider 를 세우므로 프레임워크는 `enable_instrumentation()` 만 부릅니다 —
-  signal 당 provider 는 하나뿐이라 둘이 함께 세울 수 없습니다.
-- tool 스키마는 함수 시그니처 · `Field` 설명 · docstring 에서 만들어집니다. 함수와 따로 관리할 JSON 스키마가 없습니다.
-- `@tool(approval_mode="never_require")` 는 트레이싱과 무관합니다. 빼면 호출마다 승인을 묻는데, 지켜보는 사람이 없는 스크립트는 답할 수 없습니다.
-- 정리할 것이 없어 `--delete` 가 없습니다. 프레임워크는 모델 Deployment 에 직접 말하므로 **Foundry agent 가 만들어지지 않고**,
-  포털이 이 span 들을 걸어 둘 agent 행도 없습니다. 여기서 보이는 것은 이 프로세스의 span 입니다.
-- 전부 async 라 `azure.identity.aio` 쪽 credential 을 씁니다.
-
 ```bash
 # 기본
 python hol-foundry-observability-af-single.py \
   --endpoint "<foundry-project-endpoint>"
-
-# raw SDK 버전과 나란히 비교 — span 트리 모양이 다르다
-python hol-foundry-observability-single.py --endpoint "<foundry-project-endpoint>"
-python hol-foundry-observability-af-single.py --endpoint "<foundry-project-endpoint>"
 ```
-
