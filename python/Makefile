@@ -19,17 +19,31 @@ PORT                          ?= 8088
 AZURE_AI_MODEL_DEPLOYMENT_NAME ?= gpt-5.6-terra
 STAGED                        := assets/document.md
 
+# azd binds to an existing Foundry project through FOUNDRY_PROJECT_ENDPOINT and
+# AZURE_AI_PROJECT_ID, not AZURE_AI_PROJECT_ENDPOINT. If either is missing,
+# azd provision takes its greenfield path and creates a whole new Foundry
+# account instead of using the project iac/ already built. Both are derived
+# from the one endpoint the lab exports, so nothing else has to be set.
+# Lazily assigned — the az lookup only runs when a target actually needs it.
+ACCOUNT_NAME = $(shell echo "$(AZURE_AI_PROJECT_ENDPOINT)" | sed -E 's|^https://([^.]+)\..*|\1|')
+PROJECT_NAME = $(notdir $(AZURE_AI_PROJECT_ENDPOINT))
+ACCOUNT_ID   = $(shell az resource list --name "$(ACCOUNT_NAME)" \
+                 --resource-type Microsoft.CognitiveServices/accounts \
+                 --query "[0].id" -o tsv)
+AZURE_AI_PROJECT_ID ?= $(ACCOUNT_ID)/projects/$(PROJECT_NAME)
+
 HERE := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 # azd hooks inherit the shell environment, which is how FILE reaches prepackage.
 AZD  := cd $(HERE) && AGENT_SOURCE_DOCUMENT="$(FILE)" \
         AZURE_AI_MODEL_DEPLOYMENT_NAME="$(AZURE_AI_MODEL_DEPLOYMENT_NAME)" azd
 
-.PHONY: help ask-local local stage provision deploy invoke monitor down check-file check-endpoint
+.PHONY: help ask-local local stage bind provision deploy invoke monitor down check-file check-endpoint
 
 help:
 	@echo "ask-local  FILE=…  ask the hosted agent's code one question, no server"
 	@echo "local      FILE=…  run the agent on localhost:$(PORT), nothing deployed"
 	@echo "stage      FILE=…  stage $(STAGED) and list exactly what deploy uploads"
+	@echo "bind               point the azd environment at the existing Foundry project"
 	@echo "provision          create the azd environment against the existing project"
 	@echo "deploy     FILE=…  package and deploy to Foundry Agent Service"
 	@echo "invoke     QUESTION=…  ask the deployed agent"
@@ -50,10 +64,22 @@ stage: check-file check-endpoint
 	$(AZD) package
 	@echo "--- upload ---" && unzip -l "$$(ls -t $(TMPDIR)azd-code-deploy-*.zip | head -1)" | sed -n '4,$$p'
 
-provision: check-endpoint
+# Writes the binding values into the azd environment. Run before anything that
+# talks to Azure, or azd will provision a second Foundry account of its own.
+bind: check-endpoint
+	@test -n "$(ACCOUNT_ID)" || { echo "could not find account $(ACCOUNT_NAME) — check az login and AZURE_AI_PROJECT_ENDPOINT"; exit 1; }
+	$(AZD) env set FOUNDRY_PROJECT_ENDPOINT "$(AZURE_AI_PROJECT_ENDPOINT)"
+	$(AZD) env set AZURE_AI_PROJECT_ENDPOINT "$(AZURE_AI_PROJECT_ENDPOINT)"
+	$(AZD) env set AZURE_AI_PROJECT_ID "$(AZURE_AI_PROJECT_ID)"
+	# azure.yaml resolves ${...} from the azd environment, not from the shell, so
+	# exporting this variable is not enough — the container starts without a model
+	# and crashes with "Model is required" until it is written here.
+	$(AZD) env set AZURE_AI_MODEL_DEPLOYMENT_NAME "$(AZURE_AI_MODEL_DEPLOYMENT_NAME)"
+
+provision: bind
 	$(AZD) provision
 
-deploy: check-file check-endpoint
+deploy: check-file bind
 	$(AZD) deploy
 
 invoke:
