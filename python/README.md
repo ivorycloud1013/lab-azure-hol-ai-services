@@ -332,6 +332,7 @@ export AZURE_AI_MODEL_DEPLOYMENT_NAME="<model-deployment-name>"
 | `make local FILE=…` | `localhost:8088` 에 서빙, 배포는 하지 않음 |
 | `make ask FILE=… QUESTION=…` | 같은 문서를 responses 예제로 물어보기 |
 | `make stage FILE=…` | `assets/document.md` 로 staging 하고 실제 업로드 목록 확인 |
+| `make bind` | azd 환경을 기존 Foundry project 에 연결 (provision · deploy 가 자동 호출) |
 | `make provision` | 기존 project 위에 azd 환경 생성 |
 | `make deploy FILE=…` | 패키징해서 Foundry Agent Service 에 배포 |
 | `make invoke QUESTION=…` | 배포된 에이전트에 질문 |

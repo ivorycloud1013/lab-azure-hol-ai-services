@@ -331,22 +331,18 @@ def build_connect_arguments(args, credential, agent_version):
     return {**common, "model": get_model(args)}
 
 
-async def converse(args, credential, agent_version):
-    # The sound card is settled before dialing out, so a machine without one costs
-    # nothing.
-    sounddevice = import_sounddevice()
-
+async def converse(args, credential, agent_version, sounddevice):
     async with connect(**build_connect_arguments(args, credential, agent_version)) as connection:
         await connection.session.update(session=build_session(args))
         print(f"connected to {args.agent_name or get_model(args)}")
         await run_microphone(connection, args, sounddevice)
 
 
-def talk(args, credential, agent_version):
+def talk(args, credential, agent_version, sounddevice):
     """The conversation itself, with Ctrl+C treated as a way to end it rather than
     as a failure."""
     try:
-        asyncio.run(converse(args, credential, agent_version))
+        asyncio.run(converse(args, credential, agent_version, sounddevice))
     except KeyboardInterrupt:
         print()
 
@@ -359,13 +355,13 @@ def delete_agent(project, agent_name):
         print(f"could not delete agent {agent_name}: {error}")
 
 
-def talk_to_new_agent(args, credential):
+def talk_to_new_agent(args, credential, sounddevice):
     """Create the agent, talk to it, and leave it behind unless asked otherwise."""
     project = AIProjectClient(endpoint=args.project_endpoint, credential=credential)
     existed = agent_exists(project, args.agent_name)
     delete_when_done = args.delete
     try:
-        talk(args, credential, create_agent(project, args))
+        talk(args, credential, create_agent(project, args), sounddevice)
     except BaseException:
         # Roll back only an agent this run brought into existence, never one it
         # merely added a version to.
@@ -379,12 +375,19 @@ def talk_to_new_agent(args, credential):
 
 def main():
     args = parse_args()
+
+    # Settled before anything reaches Azure. This used to happen inside converse(),
+    # which is after the agent has already been created, so a machine without
+    # PortAudio paid for an agent create and delete round trip before being told it
+    # could not record anything.
+    sounddevice = import_sounddevice()
+
     credential = create_credential(args)
 
     if args.project_endpoint:
-        talk_to_new_agent(args, credential)
+        talk_to_new_agent(args, credential, sounddevice)
     else:
-        talk(args, credential, agent_version=None)
+        talk(args, credential, None, sounddevice)
 
 
 if __name__ == "__main__":

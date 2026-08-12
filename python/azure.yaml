@@ -13,12 +13,31 @@ requiredVersions:
 name: hol-markdown-rag
 
 services:
+  # The Foundry project already exists — iac/ made it. Declaring it here with an
+  # endpoint: is what puts the provider on its brownfield path. Without this
+  # block azd provision takes the greenfield path and creates a brand new
+  # Foundry account instead of using ours, whatever the azd environment says.
+  # The endpoint comes from FOUNDRY_PROJECT_ENDPOINT so one checkout can be
+  # pointed at a different project by switching azd environments.
+  # Named hol-project, not foundry-project: azd writes each service's resolved
+  # endpoint back to <SERVICE_NAME>_ENDPOINT. A service called foundry-project
+  # writes FOUNDRY_PROJECT_ENDPOINT — the same variable it reads — so the value
+  # gets replaced by the literal string "${FOUNDRY_PROJECT_ENDPOINT}" and the
+  # next deploy fails with "no Host in request URL".
+  hol-project:
+    host: azure.ai.project
+    endpoint: ${FOUNDRY_PROJECT_ENDPOINT}
+
   markdown-rag:
     host: azure.ai.agent
     kind: hosted
     name: hol-markdown-rag
     description: Answers questions about one markdown document by grepping it.
     language: python
+
+    # Binds the agent to the existing project declared above.
+    uses:
+      - hol-project
 
     # The agent host zips this directory and does not honour dist:, so what
     # ships is controlled by .agentignore. prepackage only has to put the chosen
