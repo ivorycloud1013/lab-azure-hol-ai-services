@@ -512,67 +512,77 @@ python hol-foundry-tools-mcp.py \
 Voice Live API 로 **웹소켓 하나에 음성 입력과 음성 출력을 함께** 실어 대화합니다.
 STT·TTS 를 따로 호출하는 [`hol-foundry-models-stt_tts.py`](#hol-foundry-models-stt_ttspy) 와 대비되는 경로입니다.
 
-대답하는 쪽은 둘 중 하나입니다 — **모델(`--model`)** 이거나, **Foundry Agent Service 의 agent(`--agent-name` + `--project-name`)** 입니다.
-후자를 쓰면 앞의 knowledge · mcp 예제로 만들어 둔 agent 가 자기 instructions · knowledge · tool 을 그대로 들고 음성으로 답합니다.
-음성 처리 자체는 어느 쪽이든 Voice Live 가 맡으므로, 엔드포인트는 project 가 아니라 **계정** 엔드포인트입니다.
+대답하는 쪽은 셋 중 하나입니다.
+
+| 쓰는 인자 | 대답하는 쪽 |
+|---|---|
+| **`--project-endpoint`** | knowledge · mcp 예제처럼 **이 스크립트가 `create_version()` 으로 만든 음성 전용 agent** |
+| `--agent-name` + `--project-name` | 이미 있는 agent (예: `hol-knowledge-rag`) |
+| (없음) · `--model` | realtime 모델 직결 |
+
+첫 줄이 Agent Service 경로입니다 — project 에 prompt agent 를 만들고, 방금 만든 그 버전에 붙어 대화합니다.
+음성 처리 자체는 어느 쪽이든 Voice Live 가 맡으므로 `--endpoint` 는 project 가 아니라 **계정** 엔드포인트이고,
+agent 를 만들 project 는 `--project-endpoint` 로 따로 받습니다. project 이름은 그 URL 끝에서 읽어냅니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
-flowchart LR
-    IN["--audio-in WAV </br> or --mic"] --> WS["voicelive.connect() </br> single websocket"] --> TARGET["--model </br> or --agent-name"]
+flowchart TB
+    NEW["--project-endpoint"] --> CREATE["AIProjectClient.agents.create_version()"] --> WS
+    OLD["--agent-name + --project-name"] --> WS
+    BARE["--model"] --> WS
+    MIC["Microphone"] --> WS["voicelive.connect() </br> single websocket"]
     WS --> TEXT["Transcript"]
-    WS --> WAV["--audio-out WAV"]
+    WS --> SPK["Speaker"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
 | `--endpoint` | (필수) | Foundry **계정** 엔드포인트 (`https://<resource>.cognitiveservices.azure.com`) |
 | `--model` | `gpt-realtime` | 대화할 realtime 모델 |
-| `--agent-name` | — | 모델 대신 Foundry agent 와 대화 (자체 instructions · 도구를 가져옴) |
-| `--project-name` | — | `--agent-name` 이 있는 project |
-| `--agent-version` | 최신 | `--agent-name` 의 버전 고정 |
-| `--audio-in` | — | 말할 WAV 파일, 16-bit 모노 8/16/24 kHz |
-| `--mic` | 끔 | Ctrl+C 까지 마이크로 말하기 |
-| `--seconds` | — | `--mic` 를 N 초 뒤 종료 |
-| `--audio-out` | `voice-out.wav` | 응답 음성 저장 위치 |
+| `--project-endpoint` | — | 여기에 agent 를 만들어 대화 (`https://<resource>.services.ai.azure.com/api/projects/<project>`) |
+| `--deployment` | `gpt-5.6-terra` | 만들어질 agent 가 쓸 모델 Deployment |
+| `--agent-name` | 만들 때 `hol-voice-agent` | 만들 agent 이름, 또는 이미 있는 agent 이름 |
+| `--project-name` | — | `--agent-name` 이 있는 project (`--project-endpoint` 없을 때) |
+| `--delete` | 끔 | `--project-endpoint` 로 만든 agent 를 끝나고 삭제 |
+| `--seconds` | — | N 초 뒤 종료 (없으면 Ctrl+C 까지) |
 | `--voice` | `en-US-AvaMultilingualNeural` | Azure voice |
 | `--language` | 자동 감지 | 입력 음성 언어, 예 `ko-KR` |
 | `--instructions` | 랩 기본 프롬프트 | 어시스턴트 역할 재정의 |
 
-- `--audio-in` 과 `--mic` 중 **정확히 하나**만 줍니다.
+- 입력은 **마이크**, 출력은 **스피커** 입니다. `sounddevice` 패키지와 사운드카드가 필요하므로, Bastion 으로 접속한 점프박스에서는 동작하지 않습니다.
+- 서비스가 VAD 로 턴을 끊고 barge-in(말 끊기)이 동작합니다 — 어시스턴트가 말하는 중에 말을 걸면 재생이 멈춥니다.
+- `--project-endpoint` 는 매 실행마다 새 버전을 만들고, 방금 만든 그 버전에 붙습니다. `--instructions` 는 세션이 아니라 **agent 정의**에 들어갑니다.
 - `--agent-name` 과 `--project-name` 은 한 쌍이고, agent 가 이미 모델을 갖고 있으므로 `--model` 과는 함께 쓸 수 없습니다.
-- `--agent-name` 을 쓰면 agent 의 instructions 를 덮어쓰지 않습니다 — `--instructions` 를 명시했을 때만 바뀝니다.
+- 이미 있는 agent 에 붙을 때는 그 agent 의 instructions 를 덮어쓰지 않습니다 — `--instructions` 를 명시했을 때만 바뀝니다.
 - agent 경로는 **Entra ID 전용**입니다. 키 인증을 지원하지 않으므로 `--auth api-key` 를 주면 실행 전에 막힙니다. 계정에 `Foundry User` 역할이 필요합니다.
-- `--mic` 는 `sounddevice` 패키지와 사운드카드가 필요합니다. Bastion 으로 접속한 점프박스라면 `--audio-in` 을 쓰세요.
-- `--mic` 에서는 서비스가 VAD 로 턴을 끊고 barge-in(말 끊기)이 동작합니다. `--audio-in` 은 파일 전체가 한 턴입니다.
-- 입력 WAV 형식이 맞지 않으면 전송 전에 멈추고 변환 명령을 알려 줍니다 — `ffmpeg -i in.wav -ac 1 -ar 24000 -sample_fmt s16 converted.wav`
+- 실행 도중 실패하면 이번 실행이 **새로 만든** agent 만 지웁니다. 이미 있던 agent 에 버전만 더한 경우는 남겨 둡니다.
 - `--auth access-token` 은 Voice Live SDK 가 지원하지 않습니다.
 
 ```bash
-# 파일로 한 번 말 걸기
+# Agent Service : 음성 전용 agent 를 만들어 대화
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
-  --audio-in "assets/models/갤럭시Z 폴드8·플립8, 내일부터 사전 판매@2026.07.27.wav" \
-  --language ko-KR \
-  --audio-out voice-out.wav
+  --project-endpoint "<foundry-project-endpoint>" \
+  --language ko-KR
 
-# 마이크로 30초 대화
+# Agent Service : 이름·모델·역할을 정해 만들고, 30초 뒤 정리까지
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
-  --mic --seconds 30
+  --project-endpoint "<foundry-project-endpoint>" \
+  --agent-name hol-voice-demo \
+  --deployment "<model-deployment-name>" \
+  --instructions "너는 Azure 상담원이다. 두 문장 안에 답한다." \
+  --seconds 30 \
+  --delete
 
-# Agent Service : knowledge 예제가 남긴 agent 에게 말로 묻기
+# 이미 있는 agent : knowledge 예제가 남긴 agent 에게 말로 묻기
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
   --agent-name hol-knowledge-rag \
-  --project-name "<project-name>" \
-  --mic
+  --project-name "<project-name>"
 
-# Agent Service : 같은 agent 에게 파일로 묻고, 버전 고정
+# 모델 직결 : agent 없이 realtime 모델과 대화
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
-  --agent-name hol-mcp-ops \
-  --project-name "<project-name>" \
-  --agent-version 1 \
-  --audio-in question.wav
+  --seconds 30
 ```
