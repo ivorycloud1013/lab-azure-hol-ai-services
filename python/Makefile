@@ -5,9 +5,9 @@
 #   export AZURE_AI_PROJECT_ENDPOINT=https://<resource>.ai.azure.com/api/projects/<project>
 #   export AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5.6-terra
 #
-#   make ask-local FILE=assets/헌법.md QUESTION="…"  # one answer on this machine
-#   make local     FILE=assets/헌법.md               # serve it instead, nothing deployed
-#   make deploy    FILE=assets/헌법.md               # ship the same file to Foundry
+#   make ask-local FILE="..." QUESTION="…"  # one answer on this machine
+#   make local     FILE="..."               # serve it instead, nothing deployed
+#   make deploy    FILE="..."               # ship the same file to Foundry
 #   make invoke    QUESTION="…"
 #
 # The Foundry project and the model deployment come from iac/, so nothing here

@@ -21,7 +21,7 @@ import identity
 
 # The client asks the credential for https://cognitiveservices.azure.com/.default
 # on its own, so identity.get_token_provider (ai.azure.com) does not apply here.
-DEFAULT_ANALYZER = "prebuilt-documentSearch"
+DEFAULT_ANALYZER = "prebuilt-document"
 
 # Custom analyzers derive from one of four base analyzers, one per modality.
 # This script reads documents, so the document one is the only choice.

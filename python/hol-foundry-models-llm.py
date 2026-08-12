@@ -16,7 +16,7 @@ def parse_args():
     identity.add_auth_arguments(parser)
 
     parser.add_argument("--system", default="You are a helpful assistant.")
-    parser.add_argument("--user", required=True, help="read from stdin when omitted")
+    parser.add_argument("--user", required=True, help="user prompt")
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--stream", action="store_true")

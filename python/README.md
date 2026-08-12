@@ -221,25 +221,13 @@ python hol-foundry-models-optimize-token.py \
 
 ## Foundry Agents
 Foundry 의 **에이전트(`hol-foundry-agents-*.py`)** 를 다룹니다.
-세 스크립트 모두 **markdown 문서 하나를 근거로 답하는 같은 RAG 에이전트**이고,
-에이전트가 *어디에 사는지* 만 다릅니다.
+세 스크립트 모두 **markdown 문서 하나를 근거로 답하는 같은 RAG 에이전트**입니다.
 
 | File name | What to do |
 |---|---|
-| [`hol-foundry-agents-prompt.py`](#hol-foundry-agents-promptpy) | Foundry 에 선언형 prompt agent 를 만들고 File Search 로 답하기 |
-| [`hol-foundry-agents-responses.py`](#hol-foundry-agents-responsespy) | Responses API + function calling 으로 프로세스 안에서만 사는 agent |
-| [`hol-foundry-agents-hosted.py`](#hol-foundry-agents-hostedpy) | Agent Framework 로 만든 agent 를 Foundry Agent Service 에 배포 |
-
-| | prompt | responses | hosted |
-|---|---|---|---|
-| 에이전트가 사는 곳 | Foundry (영속) | 이 프로세스 (일회성) | Foundry Agent Service (컨테이너) |
-| 검색 방식 | File Search (vector store) | `grep` · `sed` (line 번호 인용) | `grep` · `sed` (line 번호 인용) |
-| 도구 실행 위치 | 서비스 | 내 PC | 컨테이너 |
-| 남는 리소스 | agent · vector store · file | 없음 | azd 가 만든 agent · 컨테이너 |
-| 필요한 준비 | embedding deployment | 없음 | `azd`, `microsoft.foundry` extension |
-
-입력 markdown 은 [`hol-foundry-tools-content-understanding.py`](hol-foundry-tools-content-understanding.py) 가
-PDF 에서 뽑아 놓은 `.md` 를 그대로 쓰면 됩니다. (예: `assets/tools/KB주택시장리뷰_2025년 10월호.md`)
+| [`hol-foundry-agents-prompt.py`](#hol-foundry-agents-promptpy) | Foundry 에 prompt agent (declarative) 를 만들고 File Search 로 답하기 |
+| [`hol-foundry-agents-responses.py`](#hol-foundry-agents-responsespy) | Azure OpenAI Responses API 를 이용한 로컬 Agent 만들기 |
+| [`hol-foundry-agents-hosted.py`](#hol-foundry-agents-hostedpy) | Agent Framework 로 만든 hosted agent 로컬 버전 |
 
 ### hol-foundry-agents-prompt.py
 
@@ -248,24 +236,20 @@ PDF 에서 뽑아 놓은 `.md` 를 그대로 쓰면 됩니다. (예: `assets/too
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
-flowchart LR
-    USER["cmdline arguments"] --> UP["files.create()"] --> VS["vector_stores <br/> file_batches"]
-    VS --> AG["agents.create_version() <br/> PromptAgentDefinition + FileSearchTool"]
-    AG --> CONV["conversations.create()"] --> ASK["responses.create()"] --> OUT["Answer + sources"]
+flowchart TD
+    USER["cmdline arguments"] --> UP["OpenAI.files.create()"] --> AG["AIProjectClient.agents.create_version()"] --> CONV["AIProjectClient.get_openai_client().conversations.create()"] --> ASK["AIProjectClient.get_openai_client().responses.create()"] --> OUT["Response"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | (필수) | Foundry **project** 엔드포인트 (`https://<resource>.ai.azure.com/api/projects/<project>`) |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--file` | — | 업로드할 markdown. **agent 가 아직 없을 때만** 필요 |
-| `--agent-name` | `hol-md-rag` | 재사용하거나 새로 만들 agent 이름 |
-| `--question` | (필수) | 질문. 여러 번 주면 같은 conversation 에서 이어서 물음 |
+| `--file` | — | 업로드할 파일 |
+| `--agent-name` | `hol-md-rag` | Foundry agent 이름 |
+| `--question` | (필수) | 질문 |
 | `--delete` | 끔 | 끝나고 agent · vector store · file 까지 정리 |
 
-- `--auth api-key` 와 `--auth access-token` 은 projects SDK 가 받지 않습니다. Entra ID 경로를 쓰세요.
-- vector store 색인에는 계정에 **embedding deployment** 가 있어야 합니다.
-- 실행 중 실패하면 *이번 실행이 만든 것만* 되돌립니다. 재사용한 agent 는 건드리지 않습니다.
+- vector store 색인에는 계정에 **embedding deployment** (`text-embedding-3-large`) 가 있어야 합니다.
 
 ```bash
 # 최초 실행 : 문서를 올리며 agent 생성
@@ -291,25 +275,20 @@ python hol-foundry-agents-prompt.py \
 
 ### hol-foundry-agents-responses.py
 
-Foundry 에는 아무것도 만들지 않습니다. 모델이 `search_document` · `read_lines` 를 호출하면
-이 프로세스가 `grep` · `sed` 로 로컬 파일을 읽어 결과를 돌려주는 tool loop 를 직접 돌립니다.
-vector store 가 없으니 embedding deployment 도, 색인 동기화도 필요 없습니다.
+로컬 Agent 를 구축하여 OpenAI Responses API 를 사용합니다. Tool calling 시에 RAG pipeline 을 위해 `grep` · `sed` 로 로컬 파일을 읽어 결과를 돌려 줍니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart LR
-    USER["cmdline arguments"] --> REQ["responses.create() <br/> tools=[search_document, read_lines]"]
-    REQ --> FC{"function_call?"}
-    FC -- yes --> RUN["grep / sed on local .md"] --> BACK["function_call_output <br/> previous_response_id"] --> REQ
-    FC -- no --> OUT["Answer"]
+    USER["cmdline arguments"] --> REQ["OpenAI.responses.create()"] --> OUT["Response"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | (필수) | Foundry 계정 또는 project 엔드포인트 |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--file` | (필수) | 검색할 로컬 markdown |
-| `--question` | (필수) | 질문 (한 번) |
+| `--question` | (필수) | 질문 |
 | `--show-tools` | 끔 | 모델이 돌린 검색을 그대로 출력 |
 
 - tool loop 는 최대 8 라운드입니다. 넘으면 질문을 좁히라는 메시지와 함께 종료합니다.
@@ -321,13 +300,6 @@ python hol-foundry-agents-responses.py \
   --endpoint "<foundry-aoai-endpoint>" \
   --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" \
   --question "월세 지수는 어떻게 움직였어?"
-
-# 에이전트가 어떤 검색을 돌리는지 같이 보기
-python hol-foundry-agents-responses.py \
-  --endpoint "<foundry-aoai-endpoint>" \
-  --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" \
-  --question "지방 시장과 수도권을 비교해줘." \
-  --show-tools
 ```
 
 ---
@@ -341,17 +313,14 @@ python hol-foundry-agents-responses.py \
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart LR
-    SRC["hol-foundry-agents-hosted.py"] --> Q{"--question ?"}
-    Q -- yes --> ONE["agent.run() 1회 → stdout"]
-    Q -- no --> SRV["ResponsesHostServer :8088"]
-    SRC -. "azd deploy" .-> PKG["prepackage <br/> FILE → assets/document.md"] --> HOST["Foundry Agent Service <br/> container + managed identity"]
+    SRC["create agent_framework.Agent"] --> START["ResponsesHostServer(agent).run()"] --> OUTPUT["Request&Response"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
 | `--endpoint` | `$FOUNDRY_PROJECT_ENDPOINT` · `$AZURE_AI_PROJECT_ENDPOINT` | Foundry project 엔드포인트 |
 | `--deployment` | `$FOUNDRY_MODEL_NAME` · `$AZURE_AI_MODEL_DEPLOYMENT_NAME` · `gpt-5.6-terra` | 모델 Deployment 이름 |
-| `--file` | `$AGENT_DOCUMENT` | 검색할 markdown. 없으면 스크립트 옆에서도 찾아봄 |
+| `--file` | `$AGENT_DOCUMENT` | 검색할 markdown |
 | `--question` | — | 주면 한 번 답하고 종료, 없으면 서버로 동작 |
 | `--port` | `$PORT` · `8088` | 서빙 포트 |
 | `--host` | `0.0.0.0` | bind 주소 (호스팅될 때 `0.0.0.0`) |
@@ -382,17 +351,13 @@ export AZURE_AI_MODEL_DEPLOYMENT_NAME="<model-deployment-name>"
 | `make down` | azd 가 만든 것 제거 |
 
 ```bash
-# 배포 전에 로컬에서 도구가 도는지부터 확인
-make ask-local FILE="assets/tools/KB주택시장리뷰_2025년 10월호.md" \
-  QUESTION="이 문서는 무엇에 대한 것인가요?"
-
-# 배포하고 물어보기
-make deploy FILE="assets/tools/KB주택시장리뷰_2025년 10월호.md"
-make invoke QUESTION="2025년 10월 전세 시장을 요약해줘."
-
 # 스크립트를 직접 서빙 (Makefile 없이)
 python hol-foundry-agents-hosted.py \
   --endpoint "<foundry-project-endpoint>" \
   --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" \
   --port 8088
+
+# 배포하고 물어보기
+make deploy FILE="assets/tools/KB주택시장리뷰_2025년 10월호.md"
+make invoke QUESTION="2025년 10월 전세 시장을 요약해줘."
 ```
