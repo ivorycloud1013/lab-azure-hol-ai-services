@@ -5,15 +5,9 @@ import json
 import mimetypes
 import os
 import time
-import uuid
 
 from azure.ai.contentunderstanding import ContentUnderstandingClient
-from azure.ai.contentunderstanding.models import (
-    AnalysisInput,
-    ContentAnalyzer,
-    ContentAnalyzerConfig,
-    ContentFieldSchema,
-)
+from azure.ai.contentunderstanding.models import AnalysisInput
 from azure.core.credentials import AccessToken, AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 
@@ -22,10 +16,6 @@ import identity
 # The client asks the credential for https://cognitiveservices.azure.com/.default
 # on its own, so identity.get_token_provider (ai.azure.com) does not apply here.
 DEFAULT_ANALYZER = "prebuilt-document"
-
-# Custom analyzers derive from one of four base analyzers, one per modality.
-# This script reads documents, so the document one is the only choice.
-BASE_ANALYZER = "prebuilt-document"
 
 STATIC_TOKEN_LIFETIME_SECONDS = 3600
 
@@ -43,17 +33,10 @@ def parse_args():
     parser.add_argument("--file", action="append", default=[], required=True, metavar="PATH",
                         help="document to analyze, repeat for more")
     parser.add_argument("--analyzer", help=f"existing analyzer id (default {DEFAULT_ANALYZER})")
-    parser.add_argument("--schema", metavar="JSON",
-                        help='fieldSchema file — {"name": ..., "fields": {"Title": {"type": "string", '
-                             '"method": "extract", "description": ...}}} — builds a custom analyzer for this run')
-    parser.add_argument("--processing-location", choices=["geography", "dataZone", "global"],
-                        help="where the service may process the data (default global)")
     parser.add_argument("--out-dir", help="directory for the .md and .json results (default: beside each document)")
     parser.add_argument("--api-version", default="2025-11-01")
 
     args = parser.parse_args()
-    if args.analyzer and args.schema:
-        parser.error("--analyzer picks an existing analyzer and --schema builds one, pass only one")
     for path in args.file:
         if not os.path.isfile(path):
             parser.error(f"{path} not found")
@@ -120,33 +103,9 @@ def unique_prefixes(prefixes):
     return unique
 
 
-def load_field_schema(path):
-    with open(path, encoding="utf-8") as schema_file:
-        field_schema = json.load(schema_file)
-    if not isinstance(field_schema, dict) or not isinstance(field_schema.get("fields"), dict):
-        raise SystemExit(f"{path} must be a fieldSchema object holding a fields map")
-    return ContentFieldSchema(field_schema)
-
-
-def create_analyzer(client, args, analyzer_id):
-    analyzer = ContentAnalyzer(
-        description=f"HOL analyzer from {os.path.basename(args.schema)}",
-        base_analyzer_id=BASE_ANALYZER,
-        field_schema=load_field_schema(args.schema),
-        # Grounding tells you which part of the document each value came from.
-        config=ContentAnalyzerConfig(estimate_field_source_and_confidence=True),
-    )
-    client.begin_create_analyzer(analyzer_id, analyzer).result()
-
-
-def analyze(client, args, analyzer_id, analysis_input):
+def analyze(client, analyzer_id, analysis_input):
     # One input per call. Several inputs in a single call is a pro mode feature.
-    poller = client.begin_analyze(
-        analyzer_id,
-        inputs=[analysis_input],
-        processing_location=args.processing_location,
-    )
-    return poller.result()
+    return client.begin_analyze(analyzer_id, inputs=[analysis_input]).result()
 
 
 def save_result(result, prefix):
@@ -194,7 +153,7 @@ def print_summary(result, markdown_path, json_path):
 
 def analyze_all(client, args, analyzer_id):
     for prefix, analysis_input in build_jobs(args):
-        result = analyze(client, args, analyzer_id, analysis_input)
+        result = analyze(client, analyzer_id, analysis_input)
         print_summary(result, *save_result(result, prefix))
 
 
@@ -203,19 +162,7 @@ def main():
     client = create_client(args)
 
     try:
-        if not args.schema:
-            analyze_all(client, args, args.analyzer or DEFAULT_ANALYZER)
-            return
-
-        # The custom analyzer only exists for this run, so it gets a throwaway name
-        # and is deleted again — otherwise every run would leave one behind.
-        analyzer_id = f"hol-cu-{uuid.uuid4().hex[:8]}"
-        create_analyzer(client, args, analyzer_id)
-        print(f"analyzer {analyzer_id} ready")
-        try:
-            analyze_all(client, args, analyzer_id)
-        finally:
-            client.delete_analyzer(analyzer_id)
+        analyze_all(client, args, args.analyzer or DEFAULT_ANALYZER)
     except HttpResponseError as error:
         raise SystemExit(f"{error.status_code}: {error.message or error.reason}")
     finally:

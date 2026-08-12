@@ -362,81 +362,55 @@ make deploy FILE="assets/tools/KB주택시장리뷰_2025년 10월호.md"
 make invoke QUESTION="2025년 10월 전세 시장을 요약해줘."
 ```
 
-## Foundry Tools
-Foundry 의 **도구(`hol-foundry-tools-*.py`)** 를 다룹니다.
-문서를 데이터로 바꾸고(Content Understanding), 그 데이터를 지식으로 붙이고(Knowledge),
+## Foundry IQ & Tools
+Foundry 의 IQ 와 Tools 를 다룹니다. 문서를 데이터로 바꾸고(Content Understanding), 그 데이터를 지식으로 붙이고(Knowledge),
 외부 시스템을 도구로 붙이고(MCP), 그 결과를 목소리로 주고받는(Voice) 순서입니다.
 
 | File name | What to do |
 |---|---|
-| [`hol-foundry-tools-content-understanding.py`](#hol-foundry-tools-content-understandingpy) | 문서에서 markdown · 필드 추출 |
+| [`hol-foundry-tools-content-understanding.py`](#hol-foundry-tools-content-understandingpy) | 문서에서 본문 · 필드 추출 |
 | [`hol-foundry-tools-knowledge.py`](#hol-foundry-tools-knowledgepy) | Azure AI Search 인덱스 · Bing 을 agent 지식으로 붙이기 |
 | [`hol-foundry-tools-mcp.py`](#hol-foundry-tools-mcppy) | 원격 MCP 서버를 agent 도구로 붙이기 |
 | [`hol-foundry-tools-voice.py`](#hol-foundry-tools-voicepy) | Voice Live API 로 모델 · agent 와 음성 대화 |
 
 ### hol-foundry-tools-content-understanding.py
 
-문서를 그대로 올려 markdown 과 구조화 필드를 받아옵니다. 결과는 문서마다 `.md` · `.json`
-두 개로 떨어집니다. 문서는 inline(base64)으로 전송하므로 blob storage 가 필요 없습니다.
+문서를 그대로 올려 markdown 과 구조화 필드를 받아옵니다. 입력 문서는 `.md` · `.json` 두 개로 enrichment 됩니다.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
-flowchart LR
-    USER["cmdline arguments"] --> DEC{"--schema ?"}
-    DEC -- "없음" --> PRE["prebuilt analyzer"]
-    DEC -- "있음" --> CUS["begin_create_analyzer() </br> 임시 custom analyzer"]
-    PRE --> RUN["begin_analyze()"]
-    CUS --> RUN
-    RUN --> OUT["Output .md + .json"]
-    CUS -.-> DEL["delete_analyzer()"]
+flowchart TB
+    USER["cmdline arguments"] --> PRE["ContentUnderstandingClient() 생성"] --> RUN["ContentUnderstandingClient.begin_analyze()"] --> OUT["Output .md + .json"]
 ```
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `--endpoint` | (필수) | Foundry 계정 엔드포인트 |
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
 | `--file` | (필수) | 분석할 문서, 여러 개면 반복 지정 |
 | `--analyzer` | `prebuilt-document` | 이미 있는 analyzer id |
-| `--schema` | — | fieldSchema JSON, 이 실행 동안만 쓸 custom analyzer 를 만듦 |
-| `--processing-location` | 서비스 default (`global`) | `geography` · `dataZone` · `global` |
 | `--out-dir` | 원본 문서 옆 | `.md` · `.json` 출력 디렉터리 |
 | `--api-version` | `2025-11-01` | |
-
-- `--analyzer` 와 `--schema` 는 **함께 쓸 수 없습니다** — 하나는 기존 analyzer 를 고르고, 다른 하나는 새로 만듭니다.
-- `--schema` 로 만든 analyzer 는 `hol-cu-<random>` 이름으로 생겼다가 실행이 끝나면 지워집니다.
-- 요약·필드 추출 계열 analyzer 는 계정에 모델 배포가 있어야 합니다. `--analyzer prebuilt-layout` 은 필요 없습니다.
-- 같은 이름의 문서 둘을 한 번에 넘겨도 결과가 덮어써지지 않도록 `-2`, `-3` 접미사가 붙습니다.
 
 ```bash
 # 기본 : prebuilt-document 로 markdown 뽑기
 python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-account-endpoint>" \
+  --endpoint "<foundry-project-endpoint>" \
   --file "assets/agents/2026 휴식이 있는 캘린더.pdf" \
   --out-dir assets/tools
 
 # 여러 문서 한 번에
 python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-account-endpoint>" \
+  --endpoint "<foundry-project-endpoint>" \
   --file "assets/agents/KB주택시장리뷰_2025년 10월호.pdf" \
   --file "assets/agents/대한민국 헌법.pdf" \
   --out-dir assets/tools
 
-# 필드 추출 : fieldSchema 로 custom analyzer 만들어 실행
+# 다른 prebuilt analyzer 로 : 레이아웃만 (모델 배포 불필요)
 python hol-foundry-tools-content-understanding.py \
-  --endpoint "<foundry-account-endpoint>" \
-  --schema schema.json \
-  --file "assets/agents/하도급거래 공정화에 관한 법률(법률)(제21060호)(20251217).pdf"
-```
-
-`--schema` 로 넘기는 파일은 이런 모양입니다.
-
-```json
-{
-  "name": "law-summary",
-  "fields": {
-    "Title": { "type": "string", "method": "extract", "description": "법령 제목" },
-    "Summary": { "type": "string", "method": "generate", "description": "세 문장 요약" }
-  }
-}
+  --endpoint "<foundry-project-endpoint>" \
+  --analyzer prebuilt-layout \
+  --file "assets/agents/하도급거래 공정화에 관한 법률(법률)(제21060호)(20251217).pdf" \
+  --out-dir assets/tools
 ```
 
 ---
@@ -459,7 +433,6 @@ flowchart LR
 | `--index` | — | 근거로 삼을 Azure AI Search 인덱스 (`housing` · `merchants` · `news`) |
 | `--search-connection` | project 의 기본 Search 연결 | Search 서비스로의 project connection 이름 |
 | `--bing-connection` | — | Grounding with Bing Search 연결 이름, 공개 웹까지 함께 검색 |
-| `--filter` | — | 모든 검색에 적용할 OData 필터, 예 `"category eq '기술'"` |
 | `--agent-name` | `hol-knowledge-rag` | 버전을 만들 agent 이름 |
 | `--question` | (필수) | 질문, 반복하면 같은 대화에서 이어 묻기 |
 | `--show-sources` | 끔 | agent 가 돌린 검색과 인용을 그대로 출력 |
@@ -469,7 +442,7 @@ flowchart LR
 - 인덱스는 [`aisrch-init-upload-documents.py`](aisrch-init-upload-documents.py) 가 먼저 만들어 둔 것을 씁니다.
 - 검색은 **project identity** 로 수행되므로, 내가 아니라 project 에 Search 서비스의 `Search Index Data Reader` 가 필요합니다.
 - 쿼리 타입은 `semantic` 고정입니다. 랩 인덱스는 업로드 시점에 임베딩해 vectorizer 가 없으므로 vector 계열 쿼리는 오류가 납니다.
-- 실행할 때마다 새 버전을 만듭니다 — 인덱스·필터가 정의의 일부라 바꿔 가며 비교하라는 뜻입니다.
+- 실행할 때마다 새 버전을 만듭니다 — 지식 소스가 정의의 일부라 바꿔 가며 비교하라는 뜻입니다.
 - `--auth api-key` · `--auth access-token` 은 projects SDK 가 지원하지 않습니다.
 - `--delete` 를 주지 않으면 agent 가 남으므로, 이어서 `hol-foundry-tools-voice.py --agent-name` 으로 같은 지식에 말로 물어볼 수 있습니다.
 
@@ -493,7 +466,6 @@ python hol-foundry-tools-knowledge.py \
   --endpoint "<foundry-project-endpoint>" \
   --index news \
   --bing-connection "<bing-connection-name>" \
-  --filter "category eq '기술'" \
   --question "최근 기술 뉴스 흐름을 정리해줘." \
   --delete
 ```
