@@ -43,6 +43,8 @@ Foundry를 호출합니다(keyless 인증).
 
 ## 빠른 시작
 
+**bash** (macOS · Linux)
+
 ```bash
 az login
 export RGBASENAME=hol01 REGION=westus3
@@ -67,6 +69,40 @@ az deployment sub create -n $RGBASENAME-private-whitelist -l $REGION \
                vmAdminPassword='<12자 이상 복잡한 비밀번호>'
 ```
 
+**PowerShell** (Windows)
+
+`curl` 은 PowerShell 5.1 에서 `Invoke-WebRequest` 의 별칭이라 `-s` 를 받지 못합니다.
+그리고 `ifconfig.me` 루트는 PowerShell 의 User-Agent 에 평문 IP 대신 HTML 페이지를 주므로
+`/ip` 경로를 씁니다. 내 IP 와 내 계정 ID 는 미리 변수에 담아 세 번 재사용합니다.
+
+```powershell
+az login
+
+$RGBASENAME = "hol01"
+$REGION     = "westus3"
+$MYIP       = (Invoke-RestMethod "https://ifconfig.me/ip").Trim()
+$MYOID      = az ad signed-in-user show --query id -o tsv
+
+# 1) Public
+az deployment sub create -n "$RGBASENAME-public" -l $REGION --template-file iac/public/main.bicep `
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION `
+               labClientIpAddress=$MYIP `
+               labUserPrincipalId=$MYOID
+
+# 2) Private (아웃바운드 도메인 제한 없음)
+az deployment sub create -n "$RGBASENAME-private" -l $REGION --template-file iac/private/main.bicep `
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION `
+               labUserPrincipalId=$MYOID `
+               vmAdminPassword='<12자 이상 복잡한 비밀번호>'
+
+# 3) Private + 아웃바운드 도메인 제한
+az deployment sub create -n "$RGBASENAME-private-whitelist" -l $REGION `
+  --template-file iac/private-whitelist/main.bicep `
+  --parameters resourceGroupBaseName=$RGBASENAME location=$REGION `
+               labUserPrincipalId=$MYOID `
+               vmAdminPassword='<12자 이상 복잡한 비밀번호>'
+```
+
 각 시스템 디렉터리는 Azure Developer CLI(azd) 프로젝트이기도 합니다. 해당 폴더로 이동해
 `azd up`을 실행해도 됩니다.
 
@@ -80,6 +116,7 @@ private `10.20.0.0/16`, private-whitelist `10.30.0.0/16`.
 
 - **[iac/README.md](iac/README.md)** — 아키텍처, 배포 방법, 설계 결정과 이유, 실습 시나리오, 비용, 리소스 정리
 - 시스템별 상세: [public](iac/public/README.md) · [private](iac/private/README.md) · [private-whitelist](iac/private-whitelist/README.md)
+- **[python/README.md](python/README.md)** — 배포한 Foundry 를 CLI 에서 호출해 보는 스크립트. 랩별 인자와 실행 예시가 bash · PowerShell 두 버전으로 있습니다
 
 ## 비용 주의
 
