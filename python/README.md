@@ -57,10 +57,21 @@ flowchart LR
 | `--max-tokens` | 모델 default | |
 | `--stream` | false | streaming 방식으로 token 수신 |
 
+**bash** (macOS · Linux)
+
 ```bash
 python hol-foundry-models-llm.py \
   --endpoint "<foundry-aoai-endpoint>" \
   --deployment "<model-deployment-name>" \
+  --user "Azure Private Endpoint 를 세 문장으로 설명해줘."
+```
+
+**PowerShell** (Windows)
+
+```powershell
+python hol-foundry-models-llm.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --deployment "<model-deployment-name>" `
   --user "Azure Private Endpoint 를 세 문장으로 설명해줘."
 ```
 
@@ -87,6 +98,8 @@ flowchart LR
 | `--quality` | `low` | `low` · `medium` · `high` |
 | `--count` | `1` | 받을 이미지 개수 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 생성 : 기본
 python hol-foundry-models-vlm.py \
@@ -108,6 +121,34 @@ python hol-foundry-models-vlm.py \
   --deployment "<model-deployment-name>" \
   --method edit \
   --prompt-file assets/models/style-prompt.txt \
+  --image assets/models/style-001.jpg
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 생성 : 기본
+python hol-foundry-models-vlm.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --deployment "<model-deployment-name>" `
+  --prompt "겨울 산 위의 데이터센터, 수채화" `
+  --out datacenter.png
+
+# 생성 : prompt 파일
+# --count 가 2 이상이면 두 번째부터 파일명 앞에 "1-" 이 붙습니다.
+# --out 에 경로를 주면 "1-C:\tmp\image.png" 가 되어 실패하므로 파일명만 주세요.
+python hol-foundry-models-vlm.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --deployment "<model-deployment-name>" `
+  --prompt-file assets/models/creative-01.txt `
+  --quality high --count 2
+
+# 편집
+python hol-foundry-models-vlm.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --deployment "<model-deployment-name>" `
+  --method edit `
+  --prompt-file assets/models/style-prompt.txt `
   --image assets/models/style-001.jpg
 ```
 
@@ -143,6 +184,8 @@ flowchart LR
 | `--stt-any-format` | 끔 | 16 kHz 모노가 아닌 파일도 그대로 전송 |
 | `--no-post-refine` | 끔 | TrueText 후처리 끔 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # STT — 한국어 음성으로
 python hol-foundry-models-stt_tts.py \
@@ -152,6 +195,20 @@ python hol-foundry-models-stt_tts.py \
 # TTS — STT 로 출력된 텍스트 되받아 적기
 python hol-foundry-models-stt_tts.py \
   --endpoint "<foundry-aoai-endpoint>" \
+  --tts-input "..."
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# STT — 한국어 음성으로
+python hol-foundry-models-stt_tts.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --stt-input "assets/models/갤럭시Z 폴드8·플립8, 내일부터 사전 판매@2026.07.27.wav"
+
+# TTS — STT 로 출력된 텍스트 되받아 적기
+python hol-foundry-models-stt_tts.py `
+  --endpoint "<foundry-aoai-endpoint>" `
   --tts-input "..."
 ```
 
@@ -176,10 +233,21 @@ flowchart LR
 | `--deployment` | `gpt-5.4` | 모델 Deployment 이름 |
 | `--demo` | `all` | `verbosity` · `max-tokens` · `cfg` · `reasoning` · `parallel-tools` · `all` |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 다섯 개 전부
 python hol-foundry-models-optimize-reasoning.py \
   --endpoint "<foundry-aoai-endpoint>" \
+  --deployment "<model-deployment-name>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 다섯 개 전부
+python hol-foundry-models-optimize-reasoning.py `
+  --endpoint "<foundry-aoai-endpoint>" `
   --deployment "<model-deployment-name>"
 ```
 
@@ -204,10 +272,21 @@ flowchart LR
 | `--cache-key` | `prompt-cache-key-1` | 요청을 한 엔드포인트에 붙여 두는 키 |
 | `--structured-deployments` | `gpt-4.1 gpt-5.4` | 같은 구조화 출력으로 비교할 모델 Deployment 들 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 전부
 python hol-foundry-models-optimize-token.py \
   --endpoint "<foundry-aoai-endpoint>" \
+  --deployment "<model-deployment-name>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 전부
+python hol-foundry-models-optimize-token.py `
+  --endpoint "<foundry-aoai-endpoint>" `
   --deployment "<model-deployment-name>"
 ```
 
@@ -243,6 +322,8 @@ flowchart TD
 
 - vector store 색인에는 계정에 **embedding deployment** (`text-embedding-3-large`) 가 있어야 합니다.
 
+**bash** (macOS · Linux)
+
 ```bash
 # 최초 실행 : 문서를 올리며 agent 생성
 python hol-foundry-agents-prompt.py \
@@ -260,6 +341,28 @@ python hol-foundry-agents-prompt.py \
 python hol-foundry-agents-prompt.py \
   --endpoint "<foundry-project-endpoint>" \
   --question "마지막 질문" \
+  --delete
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 최초 실행 : 문서를 올리며 agent 생성
+python hol-foundry-agents-prompt.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" `
+  --question "2025년 10월 서울 아파트 매매가격 흐름을 요약해줘."
+
+# 재사용 : --file 없이, 이어서 두 번 묻기
+python hol-foundry-agents-prompt.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --question "전세 시장은 어땠어?" `
+  --question "그 근거가 된 문장을 그대로 인용해줘."
+
+# 정리 : agent · vector store · file 삭제
+python hol-foundry-agents-prompt.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --question "마지막 질문" `
   --delete
 ```
 
@@ -284,11 +387,25 @@ flowchart LR
 - tool loop 는 최대 8 라운드입니다. 넘으면 질문을 좁히라는 메시지와 함께 종료합니다.
 - `subprocess` 를 shell 없이 실행하므로 모델이 만든 패턴이 다른 명령으로 번지지 않습니다.
 
+**bash** (macOS · Linux)
+
 ```bash
 # 기본
 python hol-foundry-agents-responses.py \
   --endpoint "<foundry-aoai-endpoint>" \
   --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" \
+  --question "월세 지수는 어떻게 움직였어?"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 이 스크립트는 tool 호출에서 grep · sed 를 외부 프로세스로 실행하므로
+# 두 명령이 없는 Windows 에서는 FileNotFoundError 로 끝납니다.
+# 기본
+python hol-foundry-agents-responses.py `
+  --endpoint "<foundry-aoai-endpoint>" `
+  --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" `
   --question "월세 지수는 어떻게 움직였어?"
 ```
 
@@ -318,12 +435,25 @@ Foundry project 와 모델 배포는 `iac/` 가 만들고, azd 는 **에이전�
 `.agentignore` 덕분에 ZIP 에는 `hol-foundry-agents-hosted.py` · `identity.py` · `requirements.txt` ·
 `assets/document.md` 네 개만 올라갑니다.
 
+**bash** (macOS · Linux)
+
 ```bash
 # 사전 준비
 az login && azd auth login
 azd ext install microsoft.foundry
 export AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
 export AZURE_AI_MODEL_DEPLOYMENT_NAME="<model-deployment-name>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 사전 준비
+az login
+azd auth login
+azd ext install microsoft.foundry
+$env:AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
+$env:AZURE_AI_MODEL_DEPLOYMENT_NAME="<model-deployment-name>"
 ```
 
 | Makefile target | 하는 일 |
@@ -338,6 +468,8 @@ export AZURE_AI_MODEL_DEPLOYMENT_NAME="<model-deployment-name>"
 | `make invoke QUESTION=…` | 배포된 에이전트에 질문 |
 | `make monitor` | 호스팅된 컨테이너 로그 따라가기 |
 | `make down` | azd 가 만든 것 제거 |
+
+**bash** (macOS · Linux)
 
 ```bash
 # 스크립트를 직접 서빙 (Makefile 없이)
@@ -362,6 +494,61 @@ make deploy FILE="assets/agents/2026 휴식이 있는 캘린더.md"
 
 # 3. 배포된 에이전트에 질문
 make invoke QUESTION="단체휴가는 언제인가요?"
+```
+
+**PowerShell** (Windows)
+
+Windows 에는 `make` 가 없으므로 위 `Makefile` target 들이 실제로 실행하는 명령을 그대로 풀어 씁니다.
+
+```powershell
+# 스크립트를 직접 서빙 (Makefile 없이)
+python hol-foundry-agents-hosted.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --file "assets/tools/KB주택시장리뷰_2025년 10월호.md" `
+  --port 8088
+
+# 배포하고 물어보기
+# 0. 사전 준비 (1회)
+az login
+azd auth login
+azd ext install microsoft.foundry
+
+$env:AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
+$env:AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5.6-terra"
+
+# 1. 배포 전 로컬 확인 (make ask-local 대신, Azure 자원 소비 없음)
+#    이 스크립트도 grep · sed 를 부르므로 로컬 Windows 에서는 실패합니다.
+#    배포된 컨테이너(Linux)에서는 정상 동작하니 2번으로 넘어가면 됩니다.
+python hol-foundry-agents-hosted.py `
+  --file "assets/agents/2026 휴식이 있는 캘린더.md" `
+  --question "단체휴가는 언제인가요?"
+
+# 2-1. azd 환경을 기존 Foundry project 에 연결 (make bind 대신)
+#      이 4개를 넣지 않으면 azd 가 iac/ 가 만든 project 를 쓰지 않고
+#      Foundry 계정을 새로 만듭니다.
+$endpoint    = $env:AZURE_AI_PROJECT_ENDPOINT
+$accountName = ([uri]$endpoint).Host.Split('.')[0]
+$projectName = ([uri]$endpoint).Segments[-1].TrimEnd('/')
+$accountId   = az resource list --name $accountName `
+  --resource-type Microsoft.CognitiveServices/accounts --query "[0].id" -o tsv
+
+azd env set FOUNDRY_PROJECT_ENDPOINT $endpoint
+azd env set AZURE_AI_PROJECT_ENDPOINT $endpoint
+azd env set AZURE_AI_PROJECT_ID "$accountId/projects/$projectName"
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME $env:AZURE_AI_MODEL_DEPLOYMENT_NAME
+
+# 2-2. 기존 Foundry 프로젝트에 배포 (make deploy 대신)
+#      azure.yaml 의 prepackage 훅이 shell: sh 이므로
+#      Git for Windows 의 sh 가 PATH 에 있어야 합니다.
+$env:AGENT_SOURCE_DOCUMENT="assets/agents/2026 휴식이 있는 캘린더.md"
+azd deploy
+
+# 3. 배포된 에이전트에 질문 (make invoke 대신)
+azd ai agent invoke "단체휴가는 언제인가요?"
+
+# 그 외 : make monitor · make down 대신
+azd ai agent monitor --follow
+azd down
 ```
 
 ## Foundry IQ & Tools
@@ -393,6 +580,8 @@ flowchart TB
 | `--out-dir` | 원본 문서 옆 | `.md` · `.json` 출력 디렉터리 |
 | `--api-version` | `2025-11-01` | |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 기본 : prebuilt-document 로 markdown 뽑기
 python hol-foundry-tools-content-understanding.py \
@@ -405,6 +594,23 @@ python hol-foundry-tools-content-understanding.py \
   --endpoint "<foundry-content-understanding-endpoint>" \
   --analyzer prebuilt-layout \
   --file "assets/agents/하도급거래 공정화에 관한 법률(법률)(제21060호)(20251217).pdf" \
+  --out-dir assets/tools
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 기본 : prebuilt-document 로 markdown 뽑기
+python hol-foundry-tools-content-understanding.py `
+  --endpoint "<foundry-content-understanding-endpoint>" `
+  --file "assets/agents/2026 휴식이 있는 캘린더.pdf" `
+  --out-dir assets/tools
+
+# 다른 prebuilt analyzer 로 : 레이아웃만 (모델 배포 불필요)
+python hol-foundry-tools-content-understanding.py `
+  --endpoint "<foundry-content-understanding-endpoint>" `
+  --analyzer prebuilt-layout `
+  --file "assets/agents/하도급거래 공정화에 관한 법률(법률)(제21060호)(20251217).pdf" `
   --out-dir assets/tools
 ```
 
@@ -433,6 +639,8 @@ flowchart TB
 - 인덱스는 [`aisrch-init-upload-documents.py`](aisrch-init-upload-documents.py) 가 먼저 만들어 둔 것을 씁니다.
 - 검색은 **project identity** 로 수행되므로, 내가 아니라 project 에 Search 서비스의 `Search Index Data Reader` 가 필요합니다.
 
+**bash** (macOS · Linux)
+
 ```bash
 # 인덱스 하나로 묻기
 python hol-foundry-tools-knowledge.py \
@@ -445,6 +653,23 @@ python hol-foundry-tools-knowledge.py \
   --endpoint "<foundry-project-endpoint>" \
   --index news \
   --bing-connection "<bing-connection-name>" \
+  --question "최근 기술 뉴스 흐름을 정리해줘."
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 인덱스 하나로 묻기
+python hol-foundry-tools-knowledge.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --index housing `
+  --question "2025년 10월 서울 아파트 매매가격 흐름을 요약해줘."
+
+# 인덱스 + 공개 웹, 그리고 정리
+python hol-foundry-tools-knowledge.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --index news `
+  --bing-connection "<bing-connection-name>" `
   --question "최근 기술 뉴스 흐름을 정리해줘."
 ```
 
@@ -468,6 +693,8 @@ flowchart TB
 | `--show-tools` | 끔 | 발견한 도구 목록과 호출 내역 출력 |
 | `--delete` | 끔 | 끝나고 agent 삭제 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 가장 간단 : 공개 Microsoft Learn MCP 서버 (인증 불필요)
 python hol-foundry-tools-mcp.py \
@@ -488,6 +715,31 @@ python hol-foundry-tools-mcp.py \
   --mcp "learn=https://learn.microsoft.com/api/mcp" \
   --mcp "myapi=https://<my-mcp-host>/mcp=https://<my-api-audience>" \
   --question "두 소스를 비교해서 정리해줘." \
+  --delete
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 가장 간단 : 공개 Microsoft Learn MCP 서버 (인증 불필요)
+python hol-foundry-tools-mcp.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --mcp "learn=https://learn.microsoft.com/api/mcp" `
+  --question "Azure Private Endpoint 와 Service Endpoint 차이를 문서 기준으로 알려줘."
+
+# 도구 호출 과정까지 보기
+python hol-foundry-tools-mcp.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --mcp "learn=https://learn.microsoft.com/api/mcp" `
+  --show-tools `
+  --question "Foundry Agent Service 의 지원 리전을 알려줘."
+
+# 여러 서버 함께 붙이기 : 두 번째는 Entra 토큰이 필요한 내부 서버
+python hol-foundry-tools-mcp.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --mcp "learn=https://learn.microsoft.com/api/mcp" `
+  --mcp "myapi=https://<my-mcp-host>/mcp=https://<my-api-audience>" `
+  --question "두 소스를 비교해서 정리해줘." `
   --delete
 ```
 
@@ -520,6 +772,8 @@ flowchart TB
 | `--language` | 자동 감지 | 입력 음성 언어, 예 `ko-KR` |
 | `--instructions` | 랩 기본 프롬프트 | 어시스턴트 역할 재정의 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # Agent Service : 음성 전용 agent 를 만들어 대화
 python hol-foundry-tools-voice.py \
@@ -546,6 +800,45 @@ python hol-foundry-tools-voice.py \
 # 모델 직결 : agent 없이 realtime 모델과 대화
 python hol-foundry-tools-voice.py \
   --endpoint "<foundry-account-endpoint>" \
+  --seconds 30
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 마이크를 쓰려면 sounddevice 가 따로 필요합니다 (requirements.txt 에 없음).
+pip install sounddevice
+
+# Windows 기본 이벤트 루프에서는 Ctrl+C 가 바로 듣지 않으므로
+# 모든 예제에 --seconds 를 주어 스스로 끝나게 합니다.
+
+# Agent Service : 음성 전용 agent 를 만들어 대화
+python hol-foundry-tools-voice.py `
+  --endpoint "<foundry-account-endpoint>" `
+  --project-endpoint "<foundry-project-endpoint>" `
+  --language ko-KR `
+  --seconds 30
+
+# Agent Service : 이름·모델·역할을 정해 만들고, 30초 뒤 정리까지
+python hol-foundry-tools-voice.py `
+  --endpoint "<foundry-account-endpoint>" `
+  --project-endpoint "<foundry-project-endpoint>" `
+  --agent-name hol-voice-demo `
+  --deployment "<model-deployment-name>" `
+  --instructions "너는 Azure 상담원이다. 두 문장 안에 답한다." `
+  --seconds 30 `
+  --delete
+
+# 이미 있는 agent : knowledge 예제가 남긴 agent 에게 말로 묻기
+python hol-foundry-tools-voice.py `
+  --endpoint "<foundry-account-endpoint>" `
+  --agent-name hol-knowledge-rag `
+  --project-name "<project-name>" `
+  --seconds 30
+
+# 모델 직결 : agent 없이 realtime 모델과 대화
+python hol-foundry-tools-voice.py `
+  --endpoint "<foundry-account-endpoint>" `
   --seconds 30
 ```
 
@@ -577,9 +870,19 @@ flowchart TB
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--delete` | 끔 | 끝나고 agent · conversation 정리 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 기본
 python hol-foundry-observability-single.py \
+  --endpoint "<foundry-project-endpoint>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 기본
+python hol-foundry-observability-single.py `
   --endpoint "<foundry-project-endpoint>"
 ```
 
@@ -599,9 +902,20 @@ flowchart TB
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 | `--delete` | 끔 | 끝나고 agent 셋 · conversation 정리 |
+
+**bash** (macOS · Linux)
+
 ```bash
 # 기본
 python hol-foundry-observability-multi.py \
+  --endpoint "<foundry-project-endpoint>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 기본
+python hol-foundry-observability-multi.py `
   --endpoint "<foundry-project-endpoint>"
 ```
 
@@ -624,6 +938,8 @@ flowchart TB
 | `--no-propagate` | 끔 | trace 헤더를 보내지 않음 (대조군) |
 | `--delete` | 끔 | 끝나고 agent 셋 정리 |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 전파 켬 : 세 hop 이 하나의 trace 로
 python hol-foundry-observability-propagation.py \
@@ -632,6 +948,19 @@ python hol-foundry-observability-propagation.py \
 # 대조군 : 헤더를 빼면 hop 마다 trace 가 갈라진다
 python hol-foundry-observability-propagation.py \
   --endpoint "<foundry-project-endpoint>" \
+  --no-propagate
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 전파 켬 : 세 hop 이 하나의 trace 로
+python hol-foundry-observability-propagation.py `
+  --endpoint "<foundry-project-endpoint>"
+
+# 대조군 : 헤더를 빼면 hop 마다 trace 가 갈라진다
+python hol-foundry-observability-propagation.py `
+  --endpoint "<foundry-project-endpoint>" `
   --no-propagate
 ```
 
@@ -651,8 +980,18 @@ flowchart TB
 | `--deployment` | `gpt-5.6-terra` | 모델 Deployment 이름 |
 | `--export` | `azure-monitor` | `azure-monitor` · `console` |
 
+**bash** (macOS · Linux)
+
 ```bash
 # 기본
 python hol-foundry-observability-af-single.py \
+  --endpoint "<foundry-project-endpoint>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 기본
+python hol-foundry-observability-af-single.py `
   --endpoint "<foundry-project-endpoint>"
 ```
