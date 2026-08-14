@@ -1,0 +1,18 @@
+# What the harness ladder needs on top of python/requirements.txt.
+#
+# This file is deliberately separate. python/requirements.txt says on its first line
+# that it ships in the code-deploy ZIP, so every package listed there lands inside the
+# hosted agent's container. azure-ai-evaluation drags in pandas, nltk, msrest and
+# Jinja2 — hundreds of megabytes the container has no use for. Keeping the scorer's
+# dependencies here is what stops `make deploy` from paying for them.
+#
+#   pip install -r requirements.txt -r harness/requirements.txt
+#
+# 1.18.3 is the first line that no longer depends on promptflow — the evaluators carry
+# their own prompty runtime now (azure.ai.evaluation._legacy.prompty). Older versions
+# pull the whole promptflow stack in, which is where this package used to fail to install.
+azure-ai-evaluation>=1.18.3
+
+# Not listed, and that is on purpose: openai, azure-identity and pydantic already come
+# from python/requirements.txt. Repeating them here would let the two files drift into
+# different floors for the same package.

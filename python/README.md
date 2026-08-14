@@ -9,6 +9,7 @@ Foundry 을 CLI에서 직접 호출해 보는 hands-on 스크립트 collection �
   pip install -r requirements.txt
   az login
   ```
+- [Foundry Harness](#foundry-harness) 절만 채점기가 따로 필요합니다 — `pip install -r harness/requirements.txt`
 
 ## 공통 인증
 
@@ -993,5 +994,120 @@ python hol-foundry-observability-af-single.py \
 ```powershell
 # 기본
 python hol-foundry-observability-af-single.py `
+  --endpoint "<foundry-project-endpoint>"
+```
+
+## Foundry Harness
+Observability 가 "무슨 일이 일어났는가"를 본다면, 여기서는 "바꿨더니 좋아졌는가"를 잽니다.
+모델과 질문과 문서를 고정한 채 **하네스만** 갈아 끼우고, 매 단계 정확도 · 토큰 · 왕복 수를 한 표에 놓습니다.
+
+| File name | What to do |
+|---|---|
+| [`harness/hol-foundry-harness-ladder.py`](#harnesshol-foundry-harness-ladderpy) | 하네스 수준 L0 → L4 를 올려가며 같은 문제를 풀고 채점하기 |
+
+### harness/hol-foundry-harness-ladder.py
+
+한국어 보고서 하나에 대한 여섯 개 질문을 다섯 가지 하네스로 풀고, `azure-ai-evaluation` 으로 채점해
+Foundry Evaluation 탭에 올립니다.
+
+| 단계 | 하네스 | 무엇이 드러나는가 |
+|---|---|---|
+| `L0` | 프롬프트만 | 모른다고 하거나, 줄번호까지 지어낸다 |
+| `L1` | 문서 전체를 요청에 넣기 | 맞히지만 질문마다 810줄 값을 다시 낸다 |
+| `L2` | grep · read 툴, 설명이 부실함 | 토큰은 급감하고 왕복이 늘어난다 |
+| `L3` | **같은 툴**, 설명 · 스키마 · 에러 메시지만 고침 | 왕복이 줄어든다 |
+| `L4` | 인용한 줄을 파일에서 확인하는 검증 루프 | 정확해지고, 비용은 L3 의 약 두 배가 된다 |
+
+L2 와 L3 는 **같은 `grep` 을 같은 파일에 대해 호출합니다.** 검색 능력은 한 비트도 달라지지 않습니다.
+바뀌는 것은 툴을 어떻게 설명했고 실패했을 때 뭐라고 답하느냐뿐이고, 그 차이가 `turns` 와 `toolacc` 열에 나타납니다.
+
+```mermaid
+%%{init: {"theme": "neutral"}}%%
+flowchart TB
+    G["GOLDEN 6문항 </br> context 는 문서에서 잘라냄"] --> L0["L0 responses.create()"]
+    G --> L1["L1 responses.create() </br> + 문서 전체"]
+    G --> L2["L2 tool loop </br> TOOLS_TERSE"]
+    G --> L3["L3 tool loop </br> TOOLS_RICH"]
+    G --> L4["L4 tool loop + critic </br> gather_evidence()"]
+    L0 --> J["evaluate()"]
+    L1 --> J
+    L2 --> J
+    L3 --> J
+    L4 --> J
+    J --> P["Foundry Evaluation 탭"]
+    J --> S["점수판"]
+```
+
+| 인자 | 기본값 | 설명 |
+|---|---|---|
+| `--endpoint` | (필수) | Foundry project 엔드포인트 |
+| `--deployment` | `gpt-5.6-terra` | 답하는 모델 Deployment 이름 |
+| `--file` | `assets/tools/KB주택시장리뷰_2025년 10월호.md` | 질문의 근거가 되는 markdown |
+| `--level` | `all` | `L0` · `L1` · `L2` · `L3` · `L4` · `all` |
+| `--questions` | `6` | 골든 세트에서 앞에서부터 몇 문항 |
+| `--repeat` | `1` | 질문마다 몇 번 반복할지, 운에 흔들리지 않으려면 올린다 |
+| `--judge` | `evaluation` | `evaluation`(azure-ai-evaluation) · `llm`(인라인 루브릭) · `none` |
+| `--judge-deployment` | `gpt-4.1` | 채점하는 모델 |
+| `--judge-reasoning` | 끔 | 채점 모델이 추론 모델이면 켠다 (`temperature` 를 보내지 않는다) |
+| `--no-upload` | 끔 | Foundry Evaluation 탭에 올리지 않고 로컬에서만 채점 |
+| `--out-dir` | 임시 디렉터리 | 행 단위 `.jsonl` 을 남길 곳 |
+| `--show-tools` | 끔 | agent 가 돌린 검색과 비평자의 반려 사유를 그대로 출력 |
+
+- **`pip install -r harness/requirements.txt` 가 따로 필요합니다.** `azure-ai-evaluation` 은 pandas · nltk 를
+  끌고 오므로, hosted agent 컨테이너로 올라가는 [`requirements.txt`](requirements.txt) 에는 넣지 않았습니다.
+- **채점이 agent 보다 비쌉니다.** 평가기 4개 × 단계 5개 × 질문 6개 = 심판 호출 120회이고,
+  `IntentResolution` 과 `ToolCallAccuracy` 는 툴 출력이 담긴 대화 전체를 프롬프트에 넣습니다.
+  전체 한 바퀴는 8~15분 걸립니다. **먼저 `--level L3 --questions 2` 로 한 번 돌려 보세요.**
+- 표본 6은 시연이지 벤치마크가 아닙니다. L2 와 L3 의 격차가 작게 나오면 `--repeat` 을 올려 다시 보세요.
+- `--delete` 가 없습니다. 이 스크립트는 agent 도 vector store 도 만들지 않고,
+  Foundry 에 남기는 것은 evaluation run 하나뿐인데 그건 지우면 안 되는 결과물입니다.
+- `--upload` 는 project 엔드포인트를 요구합니다. 채점기가 쓰는 계정 엔드포인트는 여기서 파생시키므로
+  넘길 엔드포인트는 하나뿐입니다.
+- [`.agentignore`](.agentignore) 는 파일 이름 패턴이라 `harness/` 를 걸러내지 않습니다.
+  hosted agent 를 배포한다면 `make stage` 로 ZIP 내용을 확인하세요.
+
+**bash** (macOS · Linux)
+
+```bash
+# 가장 싼 한 칸 : 인증 · 엔드포인트 · 채점기가 여기서 다 검증된다
+python harness/hol-foundry-harness-ladder.py \
+  --endpoint "<foundry-project-endpoint>" \
+  --level L3 --questions 2 --show-tools
+
+# 툴 설계만 놓고 비교 : 같은 grep, 설명만 다름
+python harness/hol-foundry-harness-ladder.py \
+  --endpoint "<foundry-project-endpoint>" \
+  --level L2 --show-tools
+
+# 채점 없이 사다리 전체 : 토큰과 왕복 수만, 심판 비용 0
+python harness/hol-foundry-harness-ladder.py \
+  --endpoint "<foundry-project-endpoint>" \
+  --judge none
+
+# 전부 : 다섯 단계 채점하고 Foundry Evaluation 탭에 올리기
+python harness/hol-foundry-harness-ladder.py \
+  --endpoint "<foundry-project-endpoint>"
+```
+
+**PowerShell** (Windows)
+
+```powershell
+# 가장 싼 한 칸 : 인증 · 엔드포인트 · 채점기가 여기서 다 검증된다
+python harness/hol-foundry-harness-ladder.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --level L3 --questions 2 --show-tools
+
+# 툴 설계만 놓고 비교 : 같은 grep, 설명만 다름
+python harness/hol-foundry-harness-ladder.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --level L2 --show-tools
+
+# 채점 없이 사다리 전체 : 토큰과 왕복 수만, 심판 비용 0
+python harness/hol-foundry-harness-ladder.py `
+  --endpoint "<foundry-project-endpoint>" `
+  --judge none
+
+# 전부 : 다섯 단계 채점하고 Foundry Evaluation 탭에 올리기
+python harness/hol-foundry-harness-ladder.py `
   --endpoint "<foundry-project-endpoint>"
 ```
