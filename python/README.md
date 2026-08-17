@@ -999,8 +999,10 @@ python hol-foundry-observability-af-single.py `
 
 ## Foundry Harness
 모델을 부르는 코드가 **에이전트**가 되려면 주위에 무엇이 더 있어야 하는지를, 한 층씩 직접 지으며 익힙니다.
-하네스는 모델을 둘러싼 **실행 레이어**(툴 호출 · 컨텍스트 관리 · 아티팩트 저장 · 플래닝 · 평가)를 뜻하고,
-이 랩의 단계가 곧 그 다섯 레이어입니다.
+
+에이전트를 처음 만들면 이 순서로 실패합니다. **① 자료가 없어 지어낸다 → ② 자료는 있는데
+엉뚱한 걸 집어 와 근거까지 달고 자신 있게 틀린다 → ③ 틀린 걸 아무도 안 봐서 그대로 나간다.**
+①은 툴을 붙이면 끝나고, 데모는 대개 거기서 멈춥니다. **이 랩의 본론은 ②와 ③입니다.**
 
 앞의 절들이 완성된 스크립트를 실행해 보는 것이라면, 여기는 **그 스크립트가 자라나는 과정**입니다.
 
@@ -1008,29 +1010,30 @@ python hol-foundry-observability-af-single.py `
 
 | File name | What to do |
 |---|---|
-| [`harness/step0_baseline.py`](harness/README.md) | 하네스 없이 모델만 — 기준선 |
-| [`harness/step1_tools.py`](harness/README.md) | 툴 호출 레이어 : 스키마 · 디스패처 · 루프 · 실패 처리 |
-| [`harness/step2_context.py`](harness/README.md) | 컨텍스트 관리 레이어 : 유지 · 압축 · 회수 |
-| [`harness/step3_artifacts.py`](harness/README.md) | 아티팩트 저장 레이어 : 알아낸 것을 이름 붙여 남기기 |
-| [`harness/step4_planning.py`](harness/README.md) | 플래닝 레이어 : 움직이기 전에 경로를 정하기 |
-| [`harness/step5_eval.py`](harness/README.md) | 평가 레이어 : 골든 세트로 회귀 잡기 |
+| [`harness/step0_baseline.py`](harness/README.md) | 하네스 없이 모델만 — 문서가 없으니 지어낸다 |
+| [`harness/step1_tools.py`](harness/README.md) | 툴 호출 레이어 : 스키마 · 디스패처 · 루프 · 실패 처리 — 찾아오는데 틀린 걸 찾아온다 |
+| [`harness/step2_verify.py`](harness/README.md) | 검증 레이어 : 근거 확인 · 반려 · 재시도 — 오답을 알아채고 다시 찾는다 |
+| [`harness/step3_eval.py`](harness/README.md) | 평가 레이어 : 골든 세트로 회귀 잡기 |
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
     CAP["harness_tools.py </br> grep · sed — 능력, 전 단계 고정"]
-    S0["step 0 </br> 하네스 없음"] --> S1["step 1 </br> 툴 호출"] --> S2["step 2 </br> 컨텍스트 관리"]
-    S2 --> S3["step 3 </br> 아티팩트 저장"] --> S4["step 4 </br> 플래닝"] --> S5["step 5 </br> 평가"]
+    S0["step 0 </br> 하네스 없음 </br> 지어낸다"] --> S1["step 1 </br> 툴 호출 </br> 자신 있게 틀린다"]
+    S1 --> S2["step 2 </br> 검증 · 재시도 </br> 알아채고 다시 찾는다"] --> S3["step 3 </br> 평가"]
     CAP -.-> S1
     CAP -.-> S2
     CAP -.-> S3
-    CAP -.-> S4
-    CAP -.-> S5
-    S5 --> R["같은 형식의 지표 리포트 </br> harness_metrics.py"]
+    S3 --> R["같은 형식의 지표 리포트 </br> harness_metrics.py"]
 ```
 
-검색 능력(`harness_tools.py`)은 **전 단계에서 한 글자도 바뀌지 않습니다.** 그래서 어떤 단계가
-왕복 수를 줄였다면 검색이 좋아진 게 아니라 — 그럴 수가 없으니 — 하네스가 한 일입니다.
+검색 능력(`harness_tools.py`)은 **전 단계에서 한 글자도 바뀌지 않습니다.** 지시문도 step 1 부터
+같은 문장을 씁니다. 그래서 숫자가 움직였다면 검색이 좋아진 게 아니라 — 그럴 수가 없으니 —
+하네스가 한 일입니다.
+
+step 2 의 규칙 하나만 기억하면 됩니다. **하네스는 정답을 모릅니다.** 그래서 "이 답이 맞는가"
+대신 **"이 답이 근거로 댄 자리가 이 답을 실제로 뒷받침하는가"** 를 묻습니다. 정답 없이 확인할
+수 있고, 옆 칸 값을 집어 온 오답은 대개 여기서 걸립니다.
 
 | 공통 인자 | 기본값 | 설명 |
 |---|---|---|
@@ -1040,14 +1043,18 @@ flowchart TB
 | `--questions` | `6` | 골든 세트에서 앞에서부터 몇 문항 |
 | `--show-tools` | 끔 | 에이전트가 부른 툴과 인자를 그대로 출력 |
 
-단계별 고유 인자는 `--broken-tools`(step 1) · `--strategy`(step 2) · `--no-artifacts`(step 3) ·
-`--no-plan`(step 4) · `--baseline` `--judge`(step 5) 입니다. 각각 **대조군**이라,
-그 하나를 껐을 때 숫자가 어떻게 달라지는지가 그 단계의 결론입니다.
+단계별 고유 인자는 `--broken-tools`(step 1) · `--no-verify`(step 2) ·
+`--baseline` `--judge`(step 3) 입니다. 각각 **대조군**이라, 그 하나를 껐을 때 숫자가 어떻게
+달라지는지가 그 단계의 결론입니다. 대조군 없이 한 번만 돌리면 그 단계는 아무것도 주장하지 않습니다.
 
-- `hit` · 토큰 · 왕복 수 · `tool error rate` · `context growth` 는 전부 **심판 없이** 나옵니다.
-  `azure-ai-evaluation` 은 `step5_eval.py --judge evaluation` 에서만 쓰고,
+- `hit` · `자신 있게 틀림` · `헛수고` · 토큰 · `tool error rate` 는 전부 **심판 없이** 나옵니다.
+  `azure-ai-evaluation` 은 `step3_eval.py --judge evaluation` 에서만 쓰고,
   그때만 `pip install -r harness/requirements.txt` 가 필요합니다.
+- **`--questions 3` 아래로 줄이지 마세요.** 앞의 세 문항이 함정 문항이고, 그보다 줄이면
+  이 랩이 보여주려는 실패가 표본에서 빠집니다.
 - 문항이 6개뿐이라 작은 차이는 운입니다. 한 문항 차이로 결론 내지 마세요.
+- step 2 는 질문마다 최대 3번 시도하고 시도마다 판정 호출이 붙습니다. **step 1 보다 몇 배
+  비쌉니다.** 그게 이 레이어의 청구서이고 리포트에 그대로 잡힙니다.
 - 이 랩은 Foundry 에 agent 도 vector store 도 만들지 않습니다. 그래서 `--delete` 가 없습니다.
 
 **bash** (macOS · Linux)
@@ -1056,16 +1063,20 @@ flowchart TB
 cd python
 export AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
 
-# 순서대로. 가장 싸게 시작한다
-python harness/step0_baseline.py --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 2
-python harness/step1_tools.py    --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 2 --show-tools
+# 순서대로. 함정 문항이 앞의 셋이라 3문항이 최소 단위다
+python harness/step0_baseline.py --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3
+python harness/step1_tools.py    --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3 --show-tools
 
 # 대조군 : 실패 처리만 빼면 어떻게 되는가
-python harness/step1_tools.py    --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 2 --broken-tools
+python harness/step1_tools.py    --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3 --broken-tools
+
+# 검증 : 오답을 알아채고 다시 찾는다. --no-verify 가 대조군(= step 1)
+python harness/step2_verify.py   --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3
+python harness/step2_verify.py   --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3 --no-verify
 
 # 회귀 검출 : 기록하고, 무언가 고치고, 무엇이 나빠졌는지 이름으로 듣는다
-python harness/step5_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
-python harness/step5_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
+python harness/step3_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
+python harness/step3_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
 ```
 
 **PowerShell** (Windows)
@@ -1074,14 +1085,18 @@ python harness/step5_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --basel
 cd python
 $env:AZURE_AI_PROJECT_ENDPOINT = "<foundry-project-endpoint>"
 
-# 순서대로. 가장 싸게 시작한다
-python harness/step0_baseline.py --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 2
-python harness/step1_tools.py    --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 2 --show-tools
+# 순서대로. 함정 문항이 앞의 셋이라 3문항이 최소 단위다
+python harness/step0_baseline.py --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3
+python harness/step1_tools.py    --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3 --show-tools
 
 # 대조군 : 실패 처리만 빼면 어떻게 되는가
-python harness/step1_tools.py    --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 2 --broken-tools
+python harness/step1_tools.py    --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3 --broken-tools
+
+# 검증 : 오답을 알아채고 다시 찾는다. --no-verify 가 대조군(= step 1)
+python harness/step2_verify.py   --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3
+python harness/step2_verify.py   --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3 --no-verify
 
 # 회귀 검출 : 기록하고, 무언가 고치고, 무엇이 나빠졌는지 이름으로 듣는다
-python harness/step5_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
-python harness/step5_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
+python harness/step3_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
+python harness/step3_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
 ```

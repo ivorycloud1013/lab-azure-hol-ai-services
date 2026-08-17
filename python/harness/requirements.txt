@@ -1,11 +1,11 @@
 # What the harness lab needs on top of python/requirements.txt.
 #
-# Only step5_eval.py --judge evaluation needs anything from here. Steps 0 to 4 and
-# step 5's default judge run on what the lab already installs, which is deliberate:
-# the metrics that carry the lesson — hit, tokens, rounds, tool errors, context growth —
-# are all deterministic and cost nothing to compute.
+# Only step3_eval.py --judge evaluation needs anything from here. Steps 0 to 2 and
+# step 3's default judge run on what the lab already installs, which is deliberate:
+# the metrics that carry the lesson — hit, confident-wrong answers, harness rejections,
+# wasted rejections, tokens, tool errors — are all deterministic and cost nothing.
 #
-#   pip install -r requirements.txt                      # steps 0-5, ungraded
+#   pip install -r requirements.txt                      # steps 0-3, ungraded
 #   pip install -r requirements.txt -r harness/requirements.txt   # adds graded scores
 #
 # This file is separate because python/requirements.txt says on its first line that it

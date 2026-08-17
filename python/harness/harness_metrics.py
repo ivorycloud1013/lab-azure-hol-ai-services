@@ -226,6 +226,11 @@ def judged(hit, missing=None, note=None):
         _field("메모", note)
 
 
+def note(label, text):
+    """'   반려  …' 처럼 라벨 하나에 문장 하나. 단계가 자기 이야기를 덧붙일 때 쓴다."""
+    _field(label, text)
+
+
 def used(calls):
     """이 질문에 쓴 tool call 을 한 줄로 요약한다."""
     if not calls:

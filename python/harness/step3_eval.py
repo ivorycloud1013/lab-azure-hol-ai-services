@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""step 5 — 평가 레이어. 방금 한 변경이 실수였다고 말해주는 것.
+"""step 3 — 평가 레이어. 방금 한 변경이 실수였다고 말해주는 것.
 
-여기까지 모든 단계가 한 번의 실행에 대한 숫자를 찍었다. 그건 평가가 아니라 계기판이다.
-평가는 어제 실행을 들고 있다가, 오늘 어느 질문이 안 되기 시작했는지 이름으로 알려주는
-부분이다 — 하나를 고치고 둘을 조용히 망가뜨리는 것이 하네스 변경의 정상적인 결과이지
-운 나쁜 결과가 아니기 때문이다.
+step 2 까지로 하네스는 다 지어졌다. tool 로 찾고, 검증으로 되짚고, 틀렸으면 다시 찾는다.
+그런데 여기서 진짜 문제가 시작된다 — **이제 이걸 고칠 수 있는가.**
 
-    python step5_eval.py --endpoint ... --out runs/a.json      # 기록
-    # step1_tools.py 에서 무언가 바꾼다 — description 한 줄, 에러 문구 하나
-    python step5_eval.py --endpoint ... --baseline runs/a.json # 대조
+검증 문구 하나, tool description 한 줄, 재시도 횟수 하나. 전부 "당연히 좋아지겠지" 싶어서
+손대는 것들이고, 실제로는 하나를 고치면서 둘을 조용히 망가뜨린다. 그게 이상한 일이 아니라
+하네스 변경의 정상적인 결과다. 알아채지 못하는 것이 문제일 뿐이다.
+
+    python step3_eval.py --endpoint ... --out runs/a.json      # 기록
+    # 무언가 바꾼다 — 검증 지시문, tool description, 에러 문구
+    python step3_eval.py --endpoint ... --baseline runs/a.json # 대조
+
+기록하는 것이 hit 만이 아니라는 점이 중요하다. 첫 답이 맞았는지, 하네스가 몇 번 반려했는지,
+맞는 답을 붙잡은 적은 없는지까지 남긴다. 검증을 조이면 hit 은 그대로인데 헛수고만 늘어나는
+변경이 아주 흔하고, hit 만 보는 리포트는 그걸 "변화 없음" 이라고 말한다.
 
 기본 judge 는 none 이고, 그래도 리포트 대부분이 채워진다. hit · token · round · tool error 는
 전부 결정론적이다. --judge evaluation 을 주면 azure-ai-evaluation 의 채점 점수가 붙고 실행이
@@ -22,18 +28,18 @@ import time
 
 import golden
 import harness_cli
-import harness_loop
 import harness_metrics as metrics
 import step1_tools
+import step2_verify
 
-INSTRUCTIONS = step1_tools.INSTRUCTIONS
+DOES = ("step 2 까지 지은 하네스 — tool · 검증 · 재시도 — 를 그대로 써서 질문 세트를 한 바퀴 "
+        "돌고, 결과를 파일로 남깁니다. --baseline 으로 앞선 실행을 주면 그 뒤로 무엇이 "
+        "나빠졌는지 질문 이름으로 알려줍니다.")
 
-DOES = ("완성된 하네스로 질문 세트를 한 바퀴 돌고, 그 결과를 파일로 남깁니다. "
-        "--baseline 으로 앞선 실행을 주면 그 뒤로 무엇이 나빠졌는지 질문 이름으로 알려줍니다.")
-
-WATCH = ("한 번 돌려 --out 으로 기록하고, step1_tools.py 에서 tool description 이나 "
-         "에러 문구를 하나 바꿔 보세요. 그다음 --baseline 으로 다시 돌리면, 분명 나아질 거라 "
-         "여겼던 그 변경이 실제로 무엇을 했는지 나옵니다.")
+WATCH = ("한 번 돌려 --out 으로 기록하고, harness_verify.py 의 판정 지시문이나 "
+         "step1_tools.py 의 tool description 을 한 줄 바꿔 보세요. 그다음 --baseline 으로 "
+         "다시 돌리면, 분명 나아질 거라 여겼던 그 변경이 실제로 무엇을 했는지 나옵니다. "
+         "hit 이 그대로여도 헛수고가 늘었으면 그건 나빠진 것입니다.")
 
 # azure-ai-evaluation 의 기본값은 2024-02-15-preview 인데 요즘 배포는 그걸 거부한다.
 JUDGE_API_VERSION = "2024-12-01-preview"
@@ -52,21 +58,31 @@ def account_endpoint(url):
     return base.rstrip("/")
 
 
-def answer_all(ctx):
-    """완성된 하네스로 질문 세트를 돌고, 질문마다 기록 하나를 남긴다."""
+def answer_all(ctx, verifying):
+    """완성된 하네스로 질문 세트를 돌고, 질문마다 기록 하나를 남긴다.
+
+    step 2 의 solve() 를 그대로 부른다. 평가가 재구현한 하네스를 재면 그 평가는 하네스에
+    대해 아무것도 말하지 않는다 — 다음 주에 둘이 어긋나고, 어긋난 줄도 모른다.
+    """
     records = []
     total = len(ctx["golden"])
     for index, item in enumerate(ctx["golden"], start=1):
         metrics.case(index, total, item["question"])
-        before = len(ctx["run"]["tool_calls"])
-        text, _ = harness_loop.run_turn(ctx, item["question"], step1_tools.TOOLS,
-                                        step1_tools.dispatch, INSTRUCTIONS)
-        calls = ctx["run"]["tool_calls"][before:]
-        hit = golden.is_hit(item, text)
-        metrics.used(calls)
-        metrics.said(text, limit=140)
+        attempts = step2_verify.solve(ctx, item, verifying)
+        final = attempts[-1]
+        text = final["text"]
+        calls = [call for attempt in attempts for call in attempt["calls"]]
+        hit = final["hit"]
+        rejected = sum(1 for a in attempts
+                       if a["verdict"] is not None and not a["verdict"].ok)
         metrics.judged(hit, golden.missing_keys(item, text))
         records.append({
+            "attempts": len(attempts),
+            "first_hit": attempts[0]["hit"],
+            "rejected": rejected,
+            # 맞는 답을 반려한 횟수. hit 이 그대로인데 이 값만 오르는 변경을 잡으려고 남긴다.
+            "wasted": sum(1 for a in attempts if a["hit"] and a["verdict"] is not None
+                          and not a["verdict"].ok),
             "id": item["id"],
             "query": item["question"],
             "response": text,
@@ -86,6 +102,9 @@ def compare(records, baseline_path):
 
     5/6 에서 5/6 으로 그대로인 통과율이 실은 회귀 둘에 수정 둘일 수 있다. 합계만 보고하는 것이
     대시보드는 초록인데 하네스는 썩어가는 방식이다.
+
+    hit 말고 헛수고도 함께 본다. 검증을 조이면 hit 은 그대로면서 맞는 답을 붙잡는 횟수만
+    오르는데, 그건 사용자 눈에 "느려지고 답이 뭉개진" 것으로 보이면서 리포트에는 안 잡힌다.
     """
     try:
         with open(baseline_path, encoding="utf-8") as handle:
@@ -105,6 +124,10 @@ def compare(records, baseline_path):
             fixes.append(record["id"])
         if record["calls"] > old["calls"]:
             drift.append(f"{record['id']} {old['calls']}->{record['calls']} 호출")
+        # 예전 기록에는 없는 열이라 기본값을 둔다. 기록 형식이 바뀌었다고 대조가 죽으면,
+        # 정작 대조가 필요한 순간(= 무언가를 바꾼 직후)에만 못 쓰게 된다.
+        if record["wasted"] > old.get("wasted", 0):
+            drift.append(f"{record['id']} 헛수고 {old.get('wasted', 0)}->{record['wasted']}번")
     return regressions, fixes, drift
 
 
@@ -185,7 +208,7 @@ def grade(args, records, out_dir, credential):
     try:
         result = module["evaluate"](
             data=path, evaluators=evaluators, evaluator_config=evaluator_config,
-            evaluation_name="harness-step5",
+            evaluation_name="harness-step3",
             azure_ai_project=args.endpoint if args.upload else None,
             credential=credential)
     except Exception as error:  # noqa: BLE001 — 채점은 이미 값을 치렀으니 행이라도 남긴다
@@ -200,10 +223,12 @@ def grade(args, records, out_dir, credential):
 
 def parse_args():
     parser = harness_cli.build_parser(
-        description="step 5 — 평가 레이어를 짓는다: 실행을 기록하고, 회귀를 잡는다.",
-        epilog="기본값인 --judge none 으로도 hit · token · round · tool error 가 나옵니다. "
+        description="step 3 — 평가 레이어를 짓는다: 실행을 기록하고, 회귀를 잡는다.",
+        epilog="기본값인 --judge none 으로도 hit · 헛수고 · token · tool error 가 나옵니다. "
                "--judge evaluation 은 채점 점수를 더하고 행마다 비용이 듭니다.",
     )
+    parser.add_argument("--no-verify", dest="verify", action="store_false",
+                        help="검증 레이어를 빼고 잰다 — 검증이 지표를 얼마나 움직였는지 볼 때")
     parser.add_argument("--out", default=None, metavar="JSON",
                         help="나중 실행이 대조할 수 있도록 이번 실행을 기록한다")
     parser.add_argument("--baseline", default=None, metavar="JSON",
@@ -225,9 +250,10 @@ def main():
     args = parse_args()
     ctx = {**harness_cli.prepare(args), "run": metrics.new_run()}
 
-    metrics.header(5, "평가", "바꾼 것이 나빠졌는지 알려주는 장치")
+    metrics.header(3, "평가", "바꾼 것이 나빠졌는지 알려주는 장치")
     metrics.overview(DOES, WATCH, [
         ("모델", args.deployment),
+        ("하네스", "tool + 검증 + 재시도" if args.verify else "tool 만 (검증 뺌)"),
         ("질문", f"{len(ctx['golden'])}개"),
         ("채점", "azure-ai-evaluation (행마다 비용 발생)"
                  if args.judge == "evaluation" else "없음 — hit 은 문자열 대조라 공짜입니다"),
@@ -235,9 +261,11 @@ def main():
     ])
 
     started = time.perf_counter()
-    records = answer_all(ctx)
+    records = answer_all(ctx, args.verify)
     elapsed = time.perf_counter() - started
     hits = sum(1 for record in records if record["hit"])
+    wasted = sum(record["wasted"] for record in records)
+    saved = sum(1 for record in records if not record["first_hit"] and record["hit"])
 
     extra = {}
     if args.judge == "evaluation":
@@ -251,6 +279,9 @@ def main():
         out_dir = tempfile.mkdtemp(prefix="harness-eval-")
         for name, value in grade(args, records, out_dir, credential).items():
             extra[name] = f"{value:.2f}" if isinstance(value, float) else value
+
+    extra["검증이 살린 답"] = f"{saved}개"
+    extra["헛수고"] = f"{wasted}번 (맞는 답을 반려)"
 
     headline = f"질문 {len(records)}개 중 {hits}개를 맞혔습니다."
     if args.baseline:
@@ -282,7 +313,7 @@ def main():
             json.dump({"deployment": args.deployment, "records": records}, handle,
                       ensure_ascii=False, indent=2)
         print(f" 기록했습니다: {args.out}")
-        print(" 이제 step1_tools.py 에서 tool description 이나 에러 문구를 하나 바꾼 뒤")
+        print(" 이제 harness_verify.py 의 판정 지시문이나 step1_tools.py 의 description 을 바꾼 뒤")
         print(f" --baseline {args.out} 으로 다시 돌려 보세요.\n")
 
 

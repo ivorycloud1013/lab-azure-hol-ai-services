@@ -89,7 +89,8 @@ def main():
         "baseline", headline, ctx["run"], elapsed, hits, total,
         extra={"지어낸 인용": f"{invented}개"},
         next_up=(f"이 숫자를 적어 두세요. step 1 에서 같은 질문 {total}개를 그대로 다시 묻되, "
-                 "이번에는 모델에게 문서를 찾아볼 tool 을 줍니다."),
+                 "이번에는 모델에게 문서를 찾아볼 tool 을 줍니다. 그러면 지어내는 것은 "
+                 "멈춥니다. 대신 다른 실패가 나타나는데, 그게 이 랩의 본론입니다."),
         command=(f"python harness/step1_tools.py --endpoint {args.endpoint} "
                  f"--questions {args.questions} --show-tools"))
 

@@ -29,10 +29,11 @@ from harness_metrics import ToolResult
 DOES = ("step 0 과 똑같은 질문을 똑같은 모델에게 묻습니다. 달라진 것은 하나뿐입니다 — "
         "모델이 문서를 검색하고 읽을 수 있는 tool 두 개를 줍니다.")
 
-WATCH = ("답이 맞아지는 것보다, 모델이 몇 번을 오가며 무엇을 검색하는지 보세요. "
-         "--show-tools 를 켜면 검색어가 그대로 보입니다. "
-         "그리고 --broken-tools 로 한 번 더 돌려서, 실패 처리만 뺐을 때 실행이 "
-         "어떻게 죽는지 확인하세요.")
+WATCH = ("맞힌 개수보다, 틀린 답이 어떻게 생겼는지를 보세요. 모델은 이제 문서를 봅니다. "
+         "그래서 step 0 처럼 허공에서 지어내지 않습니다 — 대신 문서 안의 다른 값을 집어 옵니다. "
+         "전국 값을 서울 값이라고, 8월 값을 9월 값이라고. 근거 줄 번호까지 붙여서요. "
+         "그게 실제로 있는 줄 번호라서 더 그럴듯합니다. "
+         "맨 아래 '자신 있게 틀림' 이 그 개수이고, 지금 하네스는 이걸 걸러낼 방법이 없습니다.")
 
 INSTRUCTIONS = (
     "당신은 한국 주택시장 보고서 하나에 대해 답합니다. "
@@ -184,6 +185,7 @@ def main():
 
     started = time.perf_counter()
     hits = 0
+    confident = 0   # 근거를 달고 낸 오답. step 2 가 잡으러 가는 것이 이 숫자다
     for index, item in enumerate(ctx["golden"], start=1):
         metrics.case(index, total, item["question"])
         before = len(ctx["run"]["tool_calls"])
@@ -197,26 +199,39 @@ def main():
 
         note = None
         empty = sum(1 for call in calls if not call["ok"])
-        if not hit and empty:
+        taken = golden.lured(item, text)
+        cited = golden.citations(text)
+        if not hit and taken:
+            # 이 랩이 다루는 실패다. 못 찾은 게 아니라 옆 칸을 찾아왔고, 근거까지 달았다.
+            note = (f"옆 칸 값을 집어 왔습니다: {', '.join(taken)} — {item['lure_why']}. "
+                    f"근거는 {len(cited)}개 달려 있습니다. 하네스는 이게 오답인 줄 모릅니다.")
+        elif not hit and empty:
             note = (f"검색 {empty}번이 빈손이었습니다. dispatcher 가 무엇을 찾다 실패했는지 "
                     "되돌려줬는지, 그래서 모델이 다른 말로 다시 시도했는지 보세요.")
         elif not hit and not calls:
             note = "검색을 한 번도 하지 않았습니다. instructions 가 시켰는데도 그렇습니다."
         metrics.judged(hit, golden.missing_keys(item, text), note)
+        if not hit:
+            confident += bool(cited)
 
     elapsed = time.perf_counter() - started
     empty = sum(1 for call in ctx["run"]["tool_calls"] if not call["ok"])
     headline = (f"질문 {total}개 중 {hits}개를 맞혔습니다. "
-                f"검색과 읽기를 합쳐 {len(ctx['run']['tool_calls'])}번 불렀고 "
-                f"그중 {empty}번은 빈손으로 돌아왔습니다. "
+                f"틀린 {total - hits}개 중 {confident}개는 근거까지 달고 틀렸습니다 — "
+                "모델은 확신했고, 하네스는 그대로 내보냈습니다. "
                 "grep 자체는 step 0 이후로 한 글자도 바뀌지 않았습니다.")
 
     metrics.summary(
         "tool call" + (" (실패 처리 꺼짐)" if broken else ""),
         headline, ctx["run"], elapsed, hits, total,
+        extra={"자신 있게 틀림": f"{confident}개 (근거를 달고 낸 오답)",
+               "빈손 검색": f"{empty}번"},
         next_up=("빈손 비율이 tool error rate 입니다. 이게 숫자로 나오는 이유는 실패가 "
                  "문자열이 아니라 반환값이기 때문입니다 — harness_metrics.py 의 ToolResult. "
-                 "다음은 step 2, 질문 하나로 끝나지 않을 때 무엇을 들고 다닐지의 문제입니다."))
+                 "그런데 더 큰 문제는 '자신 있게 틀림' 쪽입니다. tool 은 답을 찾아줬지만 "
+                 "그게 맞는 답인지는 아무도 안 봤습니다. 다음은 step 2, 그걸 보는 한 겹입니다."),
+        command=("python harness/step2_verify.py --endpoint "
+                 f"{args.endpoint} --questions {total}"))
 
 
 if __name__ == "__main__":
