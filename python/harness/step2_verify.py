@@ -110,6 +110,31 @@ def tally(results):
     }
 
 
+def summarize(counts, verifying):
+    """이번 실행에서 실제로 일어난 일만 말한다.
+
+    첫 답이 다 맞은 실행이 "검증이 좋다" 는 근거가 아니라는 것이 여기서 제일 중요하다.
+    잡을 오답이 없으면 검증이 남기는 것은 반려와 비용뿐이고, 그때 봐야 할 칸은 hit 이
+    아니라 헛수고다. 문구가 그렇게 말해줘야 학습자가 표에서 그 칸을 본다.
+    """
+    if not verifying:
+        if not counts["first_wrong"]:
+            return ("첫 답이 모두 정답이었습니다. 다만 하네스는 그걸 모릅니다 — "
+                    "맞아서 내보낸 게 아니라 확인하지 않고 내보낸 것입니다.")
+        return (f"첫 답이 틀린 질문이 {counts['first_wrong']}개인데, 검증이 없어서 "
+                f"{counts['first_wrong']}개 다 그대로 나갔습니다. "
+                "하네스는 무엇이 틀렸는지 모릅니다.")
+
+    if not counts["first_wrong"]:
+        return (f"첫 답이 모두 정답이었습니다. 검증은 {counts['rejections']}번 반려했고 "
+                f"그중 {counts['wasted']}번이 헛수고입니다 — 잡을 오답이 없을 때 검증이 "
+                "남기는 것은 비용뿐입니다. 이 실행 하나로는 검증의 값어치를 말할 수 없습니다.")
+    return (f"첫 답이 틀린 질문이 {counts['first_wrong']}개였습니다 — 검증이 없었다면 "
+            f"그대로 나갔을 오답입니다. 하네스가 {counts['rejections']}번 반려했고, "
+            f"그 결과 {counts['fixed']}개가 정답이 되었습니다. "
+            f"{counts['stuck']}개는 다시 찾아도 못 맞혔습니다.")
+
+
 def parse_args():
     parser = harness_cli.build_parser(
         description="step 2 — 검증 레이어를 짓는다: 오답을 알아채고 다시 찾게 한다.",
@@ -156,15 +181,7 @@ def main():
     counts = tally(results)
     hits = sum(1 for r in results if r["attempts"][-1]["hit"])
 
-    if args.verify:
-        headline = (f"첫 답이 틀린 질문이 {counts['first_wrong']}개였습니다 — 검증이 없었다면 "
-                    f"그대로 나갔을 오답입니다. 하네스가 {counts['rejections']}번 반려했고, "
-                    f"그 결과 {counts['fixed']}개가 정답이 되었습니다. "
-                    f"{counts['stuck']}개는 다시 찾아도 못 맞혔습니다.")
-    else:
-        headline = (f"첫 답이 틀린 질문이 {counts['first_wrong']}개인데, 검증이 없어서 "
-                    f"{counts['first_wrong']}개 다 그대로 나갔습니다. "
-                    "하네스는 무엇이 틀렸는지 모릅니다.")
+    headline = summarize(counts, args.verify)
 
     extra = {"첫 답 오답": f"{counts['first_wrong']}개",
              "평균 시도": f"질문당 {counts['attempts']:.1f}번"}

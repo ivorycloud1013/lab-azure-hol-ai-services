@@ -50,12 +50,17 @@ def run_turn(ctx, prompt, tools, dispatch, instructions=None, previous_id=None):
     """
     args = ctx["args"]
     request = {"model": args.deployment, "input": prompt}
+    # instructions 와 previous_response_id 는 서로 배타가 아니다. 둘 다 붙여야 한다.
+    # previous_response_id 는 *대화* 를 이어주지 *지시문* 을 이어주지 않기 때문이다 —
+    # 서비스가 그렇게 설계되어 있다(그래야 turn 마다 지시문을 갈아끼울 수 있다).
+    # 여기서 elif 로 두면 재시도 turn 은 지시문 없이 돌고, "[line N] 근거를 다세요" 가
+    # 사라진다. 그러면 검증 레이어가 잡는 것은 오답이 아니라 자기가 만든 빈칸이다.
+    if instructions:
+        request["instructions"] = instructions
     if previous_id:
         # previous_response_id 가 히스토리를 서버 쪽에 들고 있어서, 새 turn 만 올라간다.
         # token 수가 더 이상 뻔하지 않게 되는 이유이기도 하다 — step 2 참고.
         request["previous_response_id"] = previous_id
-    elif instructions:
-        request["instructions"] = instructions
     if tools:
         request["tools"] = tools
 
@@ -69,9 +74,13 @@ def run_turn(ctx, prompt, tools, dispatch, instructions=None, previous_id=None):
         ctx["run"] = run
         if not outputs:
             break
-        response = ctx["client"].responses.create(
-            model=args.deployment, previous_response_id=response.id,
-            input=outputs, tools=tools)
+        # 여기도 마찬가지다. tool 결과를 되돌려주는 이 호출이 대개 모델이 최종 답을 쓰는
+        # 호출이라, 지시문이 빠지면 하필 가장 중요한 turn 이 무지시로 돈다.
+        request = {"model": args.deployment, "previous_response_id": response.id,
+                   "input": outputs, "tools": tools}
+        if instructions:
+            request["instructions"] = instructions
+        response = ctx["client"].responses.create(**request)
         ctx["run"] = metrics.add_usage(ctx["run"], response.usage)
     else:
         # round 를 다 쓰고도 호출이 남았다. 치명적이지 않다 — 헤매는 agent 도 측정값이고,

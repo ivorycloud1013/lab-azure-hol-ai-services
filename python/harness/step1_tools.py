@@ -149,13 +149,40 @@ def answer(ctx, question):
         if not outputs:
             return response.output_text
 
+        # instructions 를 매 round 다시 붙인다. previous_response_id 는 *대화* 를 이어주지
+        # *지시문* 을 이어주지 않는다 — 서비스가 그렇게 설계되어 있다. 이걸 빼면 첫 호출만
+        # 지시문을 보고, 정작 모델이 답을 쓰는 마지막 호출은 아무 지시 없이 돈다. 그러면
+        # "[line N] 근거를 다세요" 가 사라져서 인용 없는 답이 돌아오고, step 2 의 검증은
+        # 오답이 아니라 그 빠진 인용을 잡느라 헛수고만 쌓는다.
         response = ctx["client"].responses.create(
-            model=args.deployment, previous_response_id=response.id,
-            input=outputs, tools=TOOLS)
+            model=args.deployment, instructions=INSTRUCTIONS,
+            previous_response_id=response.id, input=outputs, tools=TOOLS)
         ctx["run"] = metrics.add_usage(ctx["run"], response.usage)
 
     print(f"    [tool round {MAX_TOOL_ROUNDS}회를 넘겨 중단]")
     return response.output_text
+
+
+def summarize(total, hits, confident):
+    """이번 실행에서 실제로 일어난 일만 말한다.
+
+    문구를 실패가 있다고 가정하고 써두면, 다 맞힌 실행에서 "모델은 확신했고 하네스는 그대로
+    내보냈습니다" 같은 문장이 0개 옆에 붙는다. 학습자가 이 랩에서 배우는 것은 숫자 읽는
+    법인데, 숫자와 문장이 어긋나면 그때부터 문장을 안 읽거나 숫자를 안 믿는다.
+    """
+    lead = f"질문 {total}개 중 {hits}개를 맞혔습니다. "
+    tail = " grep 자체는 step 0 이후로 한 글자도 바뀌지 않았습니다."
+    if confident:
+        body = (f"틀린 {total - hits}개 중 {confident}개는 근거까지 달고 틀렸습니다 — "
+                "모델은 확신했고, 하네스는 그대로 내보냈습니다.")
+    elif hits < total:
+        body = (f"틀린 {total - hits}개는 근거를 달지 않았습니다. "
+                "그래도 하네스가 걸러낸 것은 없습니다 — 근거가 있든 없든 그대로 나갔습니다.")
+    else:
+        # 다 맞힌 실행이 하네스가 일했다는 뜻은 아니다. 이 단계에는 아직 확인하는 겹이 없다.
+        body = ("틀린 답이 없었습니다. 하지만 그건 이 하네스가 한 일이 아닙니다 — "
+                "답이 맞는지 아무도 보지 않았고, 틀렸어도 똑같이 나갔을 것입니다.")
+    return lead + body + tail
 
 
 def parse_args():
@@ -216,10 +243,7 @@ def main():
 
     elapsed = time.perf_counter() - started
     empty = sum(1 for call in ctx["run"]["tool_calls"] if not call["ok"])
-    headline = (f"질문 {total}개 중 {hits}개를 맞혔습니다. "
-                f"틀린 {total - hits}개 중 {confident}개는 근거까지 달고 틀렸습니다 — "
-                "모델은 확신했고, 하네스는 그대로 내보냈습니다. "
-                "grep 자체는 step 0 이후로 한 글자도 바뀌지 않았습니다.")
+    headline = summarize(total, hits, confident)
 
     metrics.summary(
         "tool call" + (" (실패 처리 꺼짐)" if broken else ""),
