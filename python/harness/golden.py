@@ -1,8 +1,8 @@
-"""The question set every step is measured against, and the document it comes from.
+"""모든 단계를 재는 질문 세트와, 그 질문들이 나온 문서.
 
-Shared so that step 0 and step 5 are answering the identical questions. If each step
-carried its own examples, a number moving between steps could always be the questions
-having changed, and nothing in the lab would be evidence of anything.
+공용으로 두는 이유는 step 0 과 step 5 가 똑같은 질문에 답하게 하기 위해서다. 단계마다 자기
+예제를 들고 있으면, 단계 사이에서 숫자가 움직였을 때 그게 질문이 바뀐 탓일 가능성이 늘
+남는다. 그러면 이 랩의 어떤 숫자도 무엇의 근거도 되지 못한다.
 """
 
 import os
@@ -10,9 +10,8 @@ import os
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DOCUMENT = os.path.join(PYTHON_DIR, "assets", "tools", "KB주택시장리뷰_2025년 10월호.md")
 
-# Questions whose answers are single figures printed in the report, so a wrong answer is
-# wrong on its face and no judge is needed to see it. source_lines says where the answer
-# lives; the text of those lines is sliced out of the file at run time, never copied here.
+# 답이 보고서에 그대로 찍혀 있는 수치인 질문만 골랐다. 틀린 답은 대놓고 틀려서 심판이 없어도
+# 보인다. source_lines 는 답이 있는 자리이고, 그 줄의 본문은 실행 시점에 파일에서 잘라온다.
 GOLDEN = [
     {
         "id": "sale-price-nationwide",
@@ -39,9 +38,8 @@ GOLDEN = [
         "source_lines": [(709, 713)],
     },
     {
-        # The Seoul figure is not in the prose — it lives in a chart's alt text, a bullet
-        # under it, and the chart's JSON. Skimming the narrative misses it; searching
-        # finds it. That gap is why this question is in the set.
+        # 서울 수치는 본문에 없다. 차트의 alt text 와 그 아래 bullet, 그리고 차트 JSON 안에만
+        # 있다. 본문만 훑으면 놓치고, 검색하면 찾는다. 그 간극 때문에 이 질문을 넣었다.
         "id": "subscription-competition",
         "question": "9월 전국 아파트 1순위 청약 경쟁률은 얼마인가요? 서울은 얼마인가요?",
         "answer_key": ["9.6대 1", "409.2"],
@@ -57,10 +55,10 @@ GOLDEN = [
 
 
 def load_document(path):
-    """Read the file once and hand back both forms it gets used in.
+    """파일을 한 번만 읽고, 쓰이는 두 형태를 함께 돌려준다.
 
-    Steps read this many times per question. Reading per call would put disk time into
-    the seconds column, which is meant to measure the harness and nothing else.
+    각 단계가 질문마다 여러 번 읽는다. 호출할 때마다 읽으면 디스크 시간이 seconds 컬럼에
+    섞여 들어가는데, 그 컬럼은 하네스만 재라고 있는 것이다.
     """
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
@@ -68,12 +66,11 @@ def load_document(path):
 
 
 def resolve_golden(lines, count=None):
-    """Slice each question's supporting text out of the document instead of storing it.
+    """근거 문단을 여기 적어두지 않고 문서에서 잘라온다.
 
-    Copying those paragraphs in here would read better and be quietly wrong: the moment
-    the document is re-extracted the copy drifts, and from then on step 5 scores answers
-    against sentences that are not in the file the agent is searching. Every step would
-    keep printing numbers and every number would be a lie.
+    베껴 두면 읽기는 좋고 조용히 틀린다. 문서를 다시 추출하는 순간 사본이 어긋나고, 그때부터
+    step 5 는 agent 가 뒤지고 있는 파일에 있지도 않은 문장을 기준으로 채점한다. 모든 단계가
+    계속 숫자를 찍고, 그 숫자가 전부 거짓말이 된다.
     """
     resolved = []
     for item in GOLDEN[:count]:
@@ -85,6 +82,6 @@ def resolve_golden(lines, count=None):
 
 
 def is_hit(item, text):
-    """Every key must appear literally. No model involved, so this number costs nothing
-    and reads the same on every run — which is why it leads every report."""
+    """정답 문자열이 전부 들어 있어야 한다. 모델을 안 쓰니 공짜이고, 몇 번을 돌려도 같은 답이
+    나온다. 그래서 모든 리포트의 첫 줄이 이 숫자다."""
     return all(key in text for key in item["answer_key"])

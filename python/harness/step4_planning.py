@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Step 4 — the planning layer. Decide the moves before making them.
+"""step 4 — planning 레이어. 움직이기 전에 수를 정한다.
 
-Everything so far reacts: the model calls a tool, sees what came back, calls another.
-That works until the question needs two findings combined, and then reacting turns into
-wandering — search, read, search something adjacent, read again, and an answer arrives
-eventually without anyone able to say why it took six calls instead of three.
+여기까지는 전부 반응이었다. 모델이 tool 을 부르고, 돌아온 걸 보고, 또 부른다. 발견 두 개를
+엮어야 하는 질문이 오기 전까지는 그걸로 된다. 그 뒤로는 반응이 배회로 바뀐다 — 검색하고,
+읽고, 옆의 것을 또 검색하고, 다시 읽고, 답은 결국 나오는데 왜 세 번이 아니라 여섯 번
+걸렸는지 아무도 말하지 못한다.
 
-Planning makes the intended route an object. The model states the steps first, as
-structured output, and then the run can be compared against what it said it would do.
-That comparison is the layer's whole value: adherence and backtracks are only
-measurable because the plan exists as data rather than as prose in the model's head.
+planning 은 의도한 경로를 물건으로 만든다. 모델이 먼저 단계를 구조화 출력으로 밝히고,
+그다음 실행이 자기가 하겠다던 것과 대조된다. 이 대조가 이 레이어의 값어치 전부다 —
+adherence 와 backtracks 를 잴 수 있는 건 오직 계획이 모델 머릿속의 산문이 아니라 데이터로
+존재하기 때문이다.
 
-Run it, then run --no-plan. Watch steps to answer.
+돌려보고 --no-plan 으로 다시 돌리세요. 볼 것은 steps to answer 입니다.
 """
 
 import time
@@ -27,25 +27,23 @@ from pydantic import BaseModel, Field
 INSTRUCTIONS = step1_tools.INSTRUCTIONS
 
 PLAN_INSTRUCTIONS = (
-    "You plan how to answer a question about a Korean housing market report before "
-    "answering it. List the tool calls you intend to make, in order, and why each one. "
-    "Plan the shortest route that would actually find the figures asked for."
+    "당신은 한국 주택시장 보고서에 대한 질문에 답하기 전에, 어떻게 답할지 먼저 계획합니다. "
+    "부를 tool call 을 순서대로 나열하고 각각 왜 필요한지 밝히세요. "
+    "질문이 요구하는 수치를 실제로 찾아낼 수 있는 가장 짧은 경로를 세우세요."
 )
 
-# The tools the planner is allowed to name. Kept in sync with what step 1 registered —
-# a plan that names a tool the dispatcher does not have is not a plan, it is a typo that
-# only shows up as a backtrack.
+# planner 가 이름 붙일 수 있는 tool. step 1 이 등록한 것과 맞춰둔다 — dispatcher 에 없는
+# tool 을 부르는 계획은 계획이 아니라 오타이고, 그건 backtrack 으로만 드러난다.
 PLANNABLE = ("search_document", "read_lines")
 
-# A plan longer than this is not a plan. If the model wants ten steps for one figure, the
-# useful signal is that it does not know where to look, and letting it write them all out
-# just moves the wandering earlier and charges for it twice.
+# 이보다 긴 것은 계획이 아니다. 수치 하나에 열 단계를 쓰겠다면 그건 어디를 봐야 할지 모른다는
+# 신호이고, 그걸 다 적게 두면 배회를 앞당기면서 값만 두 번 받게 된다.
 MAX_PLAN_STEPS = 5
 
 
 class PlanStep(BaseModel):
     tool: Literal["search_document", "read_lines"]
-    why: str = Field(description="what this call is meant to find")
+    why: str = Field(description="이 호출로 무엇을 찾으려 하는지")
 
 
 class Plan(BaseModel):
@@ -53,11 +51,10 @@ class Plan(BaseModel):
 
 
 def make_plan(ctx, question):
-    """Ask for the route as data.
+    """경로를 데이터로 받는다.
 
-    Free text would also produce a plan, and nothing downstream could check it. Forcing
-    the schema is what turns 'it said it would search first' into a value that adherence
-    can be computed from.
+    자유 텍스트로도 계획은 나온다. 다만 그걸 뒤에서 확인할 방법이 없다. schema 를 강제하는
+    것이 "먼저 검색하겠다고 했다" 를 adherence 로 계산 가능한 값으로 바꾼다.
     """
     response = ctx["client"].responses.parse(
         model=ctx["args"].deployment,
@@ -76,11 +73,11 @@ def plan_as_prompt(question, steps):
 
 
 def score_plan(steps, calls):
-    """Compare intent against what happened.
+    """의도와 실제를 대조한다.
 
-    adherence is how much of the plan was actually carried out, backtracks is how many
-    calls were not in it. They are not complements: an agent can follow every planned
-    step and still make four unplanned ones, and that is exactly the case worth seeing.
+    adherence 는 계획 중 실제로 수행된 비율, backtracks 는 계획에 없던 호출 수다. 둘은 서로의
+    여집합이 아니다 — 계획한 단계를 전부 밟고도 계획에 없는 호출을 네 번 더 할 수 있고,
+    바로 그 경우가 볼 만한 경우다.
     """
     if not steps:
         return None, len(calls)
@@ -98,12 +95,12 @@ def score_plan(steps, calls):
 
 def parse_args():
     parser = harness_cli.build_parser(
-        description="Step 4 — build the planning layer and measure whether the plan is followed.",
-        epilog="Run once, then with --no-plan. The plan costs a call up front; see if it "
-               "pays for itself in the ones that follow.",
+        description="step 4 — planning 레이어를 짓고 계획이 지켜지는지 측정한다.",
+        epilog="한 번 돌리고 --no-plan 으로 다시 돌리세요. 계획은 앞에서 호출 하나를 쓰는데, "
+               "뒤에서 그만큼을 돌려받는지 보세요.",
     )
     parser.add_argument("--no-plan", dest="plan", action="store_false",
-                        help="control run: answer reactively, the way step 1 did")
+                        help="대조군: step 1 처럼 계획 없이 반응만 한다")
     return harness_cli.finish_parsing(parser)
 
 
@@ -111,8 +108,8 @@ def main():
     args = parse_args()
     ctx = {**harness_cli.prepare(args), "run": metrics.new_run()}
 
-    metrics.header("step 4 — planning" + ("" if args.plan else " (OFF — control run)"),
-                   f"{args.deployment} · {len(ctx['golden'])} questions")
+    metrics.header("step 4 — planning" + ("" if args.plan else " (OFF — 대조군)"),
+                   f"{args.deployment} · 질문 {len(ctx['golden'])}개")
 
     started = time.perf_counter()
     hits = 0
@@ -124,7 +121,7 @@ def main():
         prompt = plan_as_prompt(item["question"], steps) if steps else item["question"]
         if steps and args.show_tools:
             for step in steps:
-                print(f"    plan: {step.tool} — {step.why}")
+                print(f"    계획: {step.tool} — {step.why}")
 
         text, _ = harness_loop.run_turn(ctx, prompt, step1_tools.TOOLS,
                                         step1_tools.dispatch, INSTRUCTIONS)
@@ -138,20 +135,20 @@ def main():
 
         hit = is_hit(item, text)
         hits += hit
-        print(f"  {'hit ' if hit else 'miss'} {item['id']}  {len(calls)} calls")
+        print(f"  {'hit ' if hit else 'miss'} {item['id']}  호출 {len(calls)}회")
 
     average = sum(steps_to_answer) / len(steps_to_answer) if steps_to_answer else 0
-    extra = {"steps to answer": f"{average:.1f} avg"}
+    extra = {"steps to answer": f"평균 {average:.1f}"}
     if adherences:
         extra["plan adherence"] = f"{sum(adherences) / len(adherences) * 100:.1f}%"
         extra["backtracks"] = backtracks
 
-    metrics.report("planning" + ("" if args.plan else " (off)"), ctx["run"],
+    metrics.report("planning" + ("" if args.plan else " (꺼짐)"), ctx["run"],
                    time.perf_counter() - started, hits, len(ctx["golden"]), extra=extra)
 
-    print("\n  The planning call is not free — it shows up in turns and input tokens.")
-    print("  Whether the layer is worth having is whether steps to answer fell by more.")
-    print("  Next: step 5 makes all of this checkable, so the next change can be measured.")
+    print("\n  계획을 세우는 호출도 공짜가 아닙니다 — turns 와 input tokens 에 그대로 잡힙니다.")
+    print("  이 레이어가 값어치를 하느냐는, steps to answer 가 그보다 더 줄었느냐입니다.")
+    print("  다음: step 5 는 이 모든 것을 확인 가능하게 만들어, 다음 변경을 잴 수 있게 합니다.")
 
 
 if __name__ == "__main__":

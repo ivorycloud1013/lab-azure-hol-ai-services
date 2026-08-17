@@ -1,8 +1,8 @@
-"""Arguments and client wiring shared by every step.
+"""모든 단계가 공유하는 인자와 client 배선.
 
-None of this is the harness. It is the boilerplate that would otherwise be copied into
-six files and make each step look bigger than the layer it teaches. What each step owns
-is below its own INSTRUCTIONS constant; what is here is only how to reach the model.
+여기 있는 것은 하네스가 아니다. 안 그러면 파일 여섯 개에 그대로 복사되어, 각 단계가
+가르치려는 레이어보다 덩치가 커 보이게 만들 보일러플레이트다. 각 단계가 소유하는 것은
+자기 파일의 INSTRUCTIONS 아래에 있고, 여기 있는 것은 모델에 닿는 방법뿐이다.
 """
 
 import argparse
@@ -22,36 +22,36 @@ DEFAULT_DEPLOYMENT = "gpt-5.6-terra"
 
 
 def build_parser(description, epilog=None):
-    """The argument skeleton every step starts from, in the order the lab's other
-    scripts use it: endpoint, deployment, auth, then whatever the step adds."""
+    """모든 단계가 출발하는 인자 골격. 이 랩의 다른 스크립트와 같은 순서를 쓴다 —
+    endpoint, deployment, 인증, 그다음이 단계 고유 인자."""
     parser = argparse.ArgumentParser(description=description, epilog=epilog)
-    parser.add_argument("--endpoint", required=True, help="Foundry project endpoint")
-    parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT, help="model deployment name")
+    parser.add_argument("--endpoint", required=True, help="Foundry project 엔드포인트")
+    parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT, help="모델 deployment 이름")
 
     identity.add_auth_arguments(parser)
 
     parser.add_argument("--file", default=golden.DEFAULT_DOCUMENT, metavar="MD",
-                        help="markdown document the questions are about")
+                        help="질문의 근거가 되는 markdown 문서")
     parser.add_argument("--questions", type=int, default=len(golden.GOLDEN),
-                        help=f"how many of the {len(golden.GOLDEN)} questions to ask")
+                        help=f"골든 세트 {len(golden.GOLDEN)}문항 중 앞에서부터 몇 개를 물을지")
     parser.add_argument("--show-tools", action="store_true",
-                        help="print every tool call the agent makes, with its arguments")
+                        help="agent 가 부른 tool 과 인자를 그대로 출력")
     return parser
 
 
 def finish_parsing(parser):
-    """Validate what every step validates. Steps add their own checks after this."""
+    """모든 단계가 하는 검증. 단계 고유 검증은 이 뒤에 붙인다."""
     args = parser.parse_args()
     if not os.path.isfile(args.file):
-        parser.error(f"{args.file} not found")
+        parser.error(f"{args.file} 를 찾을 수 없습니다")
     if not 1 <= args.questions <= len(golden.GOLDEN):
-        parser.error(f"--questions must be between 1 and {len(golden.GOLDEN)}")
+        parser.error(f"--questions 는 1 에서 {len(golden.GOLDEN)} 사이여야 합니다")
     return args
 
 
 def create_client(args):
-    # v1 API: the stock OpenAI client, no AzureOpenAI and no api-version.
-    # A callable api_key is the token provider, which the client refreshes per request.
+    # v1 API: AzureOpenAI 도 api-version 도 없는 순정 OpenAI client 를 쓴다.
+    # api_key 에 callable 을 주면 그게 token provider 이고, client 가 요청마다 갱신한다.
     if args.auth == "api-key":
         api_key = args.api_key
     elif args.auth == "access-token":
@@ -62,7 +62,7 @@ def create_client(args):
 
 
 def prepare(args):
-    """Load the document and the questions once, and hand back the context steps pass around."""
+    """문서와 질문을 한 번만 읽어, 각 단계가 들고 다닐 context 를 만든다."""
     document, lines = golden.load_document(args.file)
     return {
         "client": create_client(args),

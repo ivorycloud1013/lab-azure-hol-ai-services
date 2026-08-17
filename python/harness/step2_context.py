@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Step 2 — the context-management layer. What the agent carries between turns.
+"""step 2 — context 관리 레이어. agent 가 turn 사이에 무엇을 들고 가는가.
 
-Step 1's loop kept one question alive. A real agent gets asked several things in a row,
-and then the question stops being "can it search" and becomes "what is it dragging
-along". Three answers, all of them defensible, none of them free:
+step 1 의 loop 는 질문 하나를 살려냈다. 실제 agent 는 여러 개를 연달아 받고, 그때부터 질문은
+"검색할 수 있는가" 가 아니라 "무엇을 끌고 다니는가" 가 된다. 답은 셋이고, 셋 다 말이 되며,
+셋 다 공짜가 아니다.
 
-    full     keep the whole conversation      remembers everything, grows every turn
-    summary  compact it every few turns       stays flat, forgets the details
-    recall   keep nothing, look it up         stays flat, pays a search per turn
+    full     대화를 통째로 유지        전부 기억하고, turn 마다 커진다
+    summary  몇 turn 마다 압축          평평하게 유지되고, 세부를 잊는다
+    recall   아무것도 안 들고 필요하면 찾음  평평하게 유지되고, turn 마다 검색 비용을 낸다
 
-Run --strategy all. The number to watch is context growth: tokens per model call, fitted
-across the run. full climbs, the other two do not. Then look at the recall check at the
-end, which asks about the very first turn — that is what summary pays for staying flat.
+--strategy all 로 돌리세요. 볼 숫자는 context growth — model 호출당 token 을 실행 전체에
+회귀시킨 기울기입니다. full 은 올라가고 나머지 둘은 안 올라갑니다. 그다음 맨 끝의 recall
+check 를 보세요. 첫 turn 에 대해 묻는데, 그게 summary 가 평평함의 대가로 치른 것입니다.
 """
 
 import os
@@ -24,13 +24,12 @@ import harness_metrics as metrics
 import step1_tools
 from golden import is_hit
 
-# The same words step 1 used. This step changes what the agent carries between turns,
-# nothing about how it is told to behave.
+# step 1 과 같은 문장. 이 단계가 바꾸는 것은 agent 가 turn 사이에 들고 가는 것이지,
+# 어떻게 행동하라고 말해주는 내용이 아니다.
 INSTRUCTIONS = step1_tools.INSTRUCTIONS
 
-# How many turns before the summary strategy compacts. Small enough that a short lab run
-# actually crosses it — at 4 the fold happens twice in a six-question run, which is what
-# makes the flattening visible instead of theoretical.
+# summary 전략이 몇 turn 마다 압축하는가. 짧은 랩 실행에서도 실제로 넘어가도록 작게 잡았다 —
+# 4면 질문 6개짜리 실행에서 두 번 접히고, 그래야 평평해지는 게 이론이 아니라 눈에 보인다.
 SUMMARIZE_EVERY = 4
 
 SUMMARY_REQUEST = (
@@ -38,8 +37,8 @@ SUMMARY_REQUEST = (
     "각 항목에 근거 줄번호를 [line N] 형식으로 남기세요. 추측은 넣지 마세요."
 )
 
-# Lines of transcript the recall strategy hands back per turn. Large enough to carry an
-# earlier finding, small enough that it cannot quietly become the full strategy again.
+# recall 전략이 turn 마다 되돌려주는 transcript 줄 수. 앞선 발견을 실어 나를 만큼은 크고,
+# 슬그머니 full 전략이 되어버릴 만큼 크지는 않게.
 RECALL_LINES = 12
 
 
@@ -48,19 +47,17 @@ def transcript_path(directory):
 
 
 def append_transcript(path, question, answer):
-    """The recall strategy's memory. A file, on purpose — it is the same thing step 3
-    turns into a first-class artifact store, and seeing it start as one flat log makes
-    that step's argument easier to follow."""
+    """recall 전략의 기억. 일부러 파일이다 — step 3 이 이걸 제대로 된 artifact store 로
+    바꾸는데, 여기서 평평한 로그 하나로 시작하는 걸 봐두면 그 단계의 주장이 따라가기 쉽다."""
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(f"\n## {question}\n{answer.strip()}\n")
 
 
 def recall_context(path):
-    """Pull the tail of the transcript back into the next prompt.
+    """transcript 의 꼬리를 다음 prompt 로 되가져온다.
 
-    Deliberately dumb — the last N lines, no ranking. A retrieval step good enough to
-    argue about would make this step about retrieval quality instead of about the choice
-    between carrying history and fetching it.
+    일부러 멍청하게 만들었다 — 마지막 N 줄, 순위 매기기 없음. 논쟁할 만큼 좋은 검색을 넣으면
+    이 단계가 "히스토리를 들고 갈까 가져올까" 가 아니라 검색 품질에 대한 이야기가 된다.
     """
     if not os.path.isfile(path):
         return ""
@@ -70,7 +67,7 @@ def recall_context(path):
 
 
 def run_strategy(ctx, name, directory):
-    """Ask every question in one conversation, under one context strategy."""
+    """한 대화 안에서 모든 질문을, 하나의 context 전략으로 묻는다."""
     args = ctx["args"]
     path = transcript_path(os.path.join(directory, name))
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -100,12 +97,12 @@ def run_strategy(ctx, name, directory):
         elif name == "summary":
             previous_id = response_id
             if index % SUMMARIZE_EVERY == 0:
-                # Fold the chain into text, then drop the chain. Keeping both would keep
-                # the growth the summary exists to stop.
+                # 대화 사슬을 글로 접은 다음, 사슬을 끊는다. 둘 다 들고 있으면 summary 가
+                # 막으려던 그 증가를 그대로 안고 가게 된다.
                 summary, _ = harness_loop.run_turn(
                     ctx, SUMMARY_REQUEST, None, None, INSTRUCTIONS, previous_id)
                 previous_id = None
-                print(f"       [compacted after turn {index}]")
+                print(f"       [turn {index} 뒤 압축]")
         else:
             append_transcript(path, item["question"], text)
 
@@ -113,10 +110,10 @@ def run_strategy(ctx, name, directory):
 
 
 def check_recall(ctx, first_item, previous_id=None):
-    """Ask about the first turn, last. This is the bill for staying flat.
+    """맨 마지막에 첫 turn 을 묻는다. 평평함의 청구서다.
 
-    A strategy that never grew has to have kept the early finding somewhere, or it
-    cannot answer this — and a flat token curve with a failed recall is not a win.
+    한 번도 안 커진 전략은 초기 발견을 어딘가에 남겨뒀어야 이 질문에 답할 수 있다.
+    token 곡선이 평평한데 recall 이 실패했다면 그건 이긴 게 아니다.
     """
     question = f"앞서 확인한 내용 중, {first_item['question']} 다시 알려주세요."
     text, _ = harness_loop.run_turn(ctx, question, step1_tools.TOOLS,
@@ -126,14 +123,14 @@ def check_recall(ctx, first_item, previous_id=None):
 
 def parse_args():
     parser = harness_cli.build_parser(
-        description="Step 2 — build the context-management layer and compare three strategies.",
-        epilog="Watch context growth. full climbs, summary and recall stay flat, and the "
-               "recall check at the end says what that flatness cost.",
+        description="step 2 — context 관리 레이어를 짓고 세 전략을 비교한다.",
+        epilog="context growth 를 보세요. full 은 올라가고 summary 와 recall 은 평평합니다. "
+               "맨 끝 recall check 가 그 평평함의 대가를 말해줍니다.",
     )
     parser.add_argument("--strategy", choices=["full", "summary", "recall", "all"],
                         default="all")
     parser.add_argument("--out-dir", default=None,
-                        help="where the recall strategy keeps its transcript")
+                        help="recall 전략이 transcript 를 남길 곳")
     return harness_cli.finish_parsing(parser)
 
 
@@ -145,19 +142,19 @@ def main():
     names = ["full", "summary", "recall"] if args.strategy == "all" else [args.strategy]
     for name in names:
         ctx = {**base, "run": metrics.new_run()}
-        metrics.header(f"step 2 — context management: {name}",
-                       f"{args.deployment} · {len(ctx['golden'])} turns in one conversation")
+        metrics.header(f"step 2 — context 관리: {name}",
+                       f"{args.deployment} · 한 대화 안에서 {len(ctx['golden'])} turn")
         started = time.perf_counter()
         hits = run_strategy(ctx, name, directory)
         recalled = check_recall(ctx, ctx["golden"][0])
-        metrics.report(f"context management ({name})", ctx["run"],
+        metrics.report(f"context 관리 ({name})", ctx["run"],
                        time.perf_counter() - started, hits, len(ctx["golden"]),
-                       extra={"recall check": "kept" if recalled else "LOST"})
+                       extra={"recall check": "기억함" if recalled else "잊음"})
 
-    print(f"\n  transcripts: {directory}")
-    print("  Context growth is tokens per model call, fitted over the run. A flat curve")
-    print("  with a LOST recall is not a saving — it is the agent forgetting on schedule.")
-    print("  Next: step 3 gives it somewhere to put things it should not have to re-derive.")
+    print(f"\n  transcript: {directory}")
+    print("  context growth 는 model 호출당 token 을 실행 전체에 회귀시킨 기울기입니다.")
+    print("  곡선이 평평한데 recall 이 '잊음' 이면 그건 절약이 아니라 예정대로 잊은 것입니다.")
+    print("  다음: step 3 은 다시 구할 필요 없는 것을 둘 자리를 만들어 줍니다.")
 
 
 if __name__ == "__main__":
