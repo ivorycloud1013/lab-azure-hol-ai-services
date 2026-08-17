@@ -20,13 +20,20 @@ import os
 import tempfile
 import time
 
+import golden
 import harness_cli
 import harness_loop
 import harness_metrics as metrics
 import step1_tools
-from golden import is_hit
 
 INSTRUCTIONS = step1_tools.INSTRUCTIONS
+
+DOES = ("완성된 하네스로 질문 세트를 한 바퀴 돌고, 그 결과를 파일로 남깁니다. "
+        "--baseline 으로 앞선 실행을 주면 그 뒤로 무엇이 나빠졌는지 질문 이름으로 알려줍니다.")
+
+WATCH = ("한 번 돌려 --out 으로 기록하고, step1_tools.py 에서 tool description 이나 "
+         "에러 문구를 하나 바꿔 보세요. 그다음 --baseline 으로 다시 돌리면, 분명 나아질 거라 "
+         "여겼던 그 변경이 실제로 무엇을 했는지 나옵니다.")
 
 # azure-ai-evaluation 의 기본값은 2024-02-15-preview 인데 요즘 배포는 그걸 거부한다.
 JUDGE_API_VERSION = "2024-12-01-preview"
@@ -48,14 +55,17 @@ def account_endpoint(url):
 def answer_all(ctx):
     """완성된 하네스로 질문 세트를 돌고, 질문마다 기록 하나를 남긴다."""
     records = []
-    for item in ctx["golden"]:
+    total = len(ctx["golden"])
+    for index, item in enumerate(ctx["golden"], start=1):
+        metrics.case(index, total, item["question"])
         before = len(ctx["run"]["tool_calls"])
-        started = time.perf_counter()
         text, _ = harness_loop.run_turn(ctx, item["question"], step1_tools.TOOLS,
                                         step1_tools.dispatch, INSTRUCTIONS)
         calls = ctx["run"]["tool_calls"][before:]
-        hit = is_hit(item, text)
-        print(f"  {'hit ' if hit else 'miss'} {item['id']}  호출 {len(calls)}회")
+        hit = golden.is_hit(item, text)
+        metrics.used(calls)
+        metrics.said(text, limit=140)
+        metrics.judged(hit, golden.missing_keys(item, text))
         records.append({
             "id": item["id"],
             "query": item["question"],
@@ -215,8 +225,14 @@ def main():
     args = parse_args()
     ctx = {**harness_cli.prepare(args), "run": metrics.new_run()}
 
-    metrics.header("step 5 — 평가",
-                   f"{args.deployment} · 질문 {len(ctx['golden'])}개 · judge {args.judge}")
+    metrics.header(5, "평가", "바꾼 것이 나빠졌는지 알려주는 장치")
+    metrics.overview(DOES, WATCH, [
+        ("모델", args.deployment),
+        ("질문", f"{len(ctx['golden'])}개"),
+        ("채점", "azure-ai-evaluation (행마다 비용 발생)"
+                 if args.judge == "evaluation" else "없음 — hit 은 문자열 대조라 공짜입니다"),
+        ("대조", args.baseline or "없음 (--baseline 으로 앞선 기록을 주세요)"),
+    ])
 
     started = time.perf_counter()
     records = answer_all(ctx)
@@ -236,26 +252,38 @@ def main():
         for name, value in grade(args, records, out_dir, credential).items():
             extra[name] = f"{value:.2f}" if isinstance(value, float) else value
 
-    metrics.report("평가", ctx["run"], elapsed, hits, len(records), extra=extra)
-
+    headline = f"질문 {len(records)}개 중 {hits}개를 맞혔습니다."
     if args.baseline:
         regressions, fixes, drift = compare(records, args.baseline)
-        print(f"\n  {args.baseline} 과 비교")
-        print(f"    회귀       {', '.join(regressions) if regressions else '없음'}")
-        print(f"    개선       {', '.join(fixes) if fixes else '없음'}")
-        print(f"    호출 증가  {', '.join(drift) if drift else '없음'}")
         if regressions:
-            print("\n  회귀는 전에는 통과하던 질문입니다. 고치든 알고서 받아들이든 하세요 —")
-            print("  다만 사용자에게서 그 사실을 전해 듣지는 마세요.")
+            headline += f" 전에는 되던 {len(regressions)}개가 이번에 안 됩니다."
+        elif fixes:
+            headline += f" 안 되던 {len(fixes)}개가 이번에 됩니다. 나빠진 것은 없습니다."
+        else:
+            headline += " 앞선 기록과 견줘 통과 여부가 바뀐 질문은 없습니다."
+    else:
+        headline += " 이 결과를 --out 으로 남겨두면 다음 실행이 여기에 견줄 수 있습니다."
+
+    metrics.summary("평가", headline, ctx["run"], elapsed, hits, len(records), extra=extra)
+
+    if args.baseline:
+        print(f" {args.baseline} 과 비교")
+        print(f"   회귀       {', '.join(regressions) if regressions else '없음'}")
+        print(f"   개선       {', '.join(fixes) if fixes else '없음'}")
+        print(f"   호출 증가  {', '.join(drift) if drift else '없음'}")
+        if regressions:
+            print("\n 회귀는 전에는 통과하던 질문입니다. 고치든, 알고서 받아들이든 하세요 —")
+            print(" 다만 그 사실을 사용자에게서 전해 듣지는 마세요.")
+        print()
 
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump({"deployment": args.deployment, "records": records}, handle,
                       ensure_ascii=False, indent=2)
-        print(f"\n  기록: {args.out}")
-        print("  step1_tools.py 에서 무언가 바꾼 뒤 --baseline 으로 다시 돌려서,")
-        print("  분명 나아질 거라 여겼던 그 변경이 실제로 도움이 됐는지 확인하세요.")
+        print(f" 기록했습니다: {args.out}")
+        print(" 이제 step1_tools.py 에서 tool description 이나 에러 문구를 하나 바꾼 뒤")
+        print(f" --baseline {args.out} 으로 다시 돌려 보세요.\n")
 
 
 if __name__ == "__main__":

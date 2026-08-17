@@ -16,12 +16,19 @@ import re
 import tempfile
 import time
 
+import golden
 import harness_cli
 import harness_loop
 import harness_metrics as metrics
 import step1_tools
-from golden import is_hit
 from harness_metrics import ToolResult
+
+DOES = ("질문 몇 개를 차례로 묻고, 마지막에 그 전부를 한 표로 정리하라고 시킵니다. "
+        "이번에는 알아낸 것을 이름 붙여 저장하고 다시 읽을 수 있는 tool 을 함께 줍니다.")
+
+WATCH = ("마지막 정리 질문에서 tool call 을 몇 번 쓰는지 보세요. 저장해 둔 것을 읽으면 "
+         "몇 번이면 되고, 저장할 데가 없으면 모든 수치를 문서에서 다시 찾아야 합니다. "
+         "--no-artifacts 로 한 번 더 돌려 두 숫자를 나란히 놓아 보세요.")
 
 INSTRUCTIONS = (
     "당신은 한국 주택시장 보고서 하나에 대해 답합니다. "
@@ -163,36 +170,61 @@ def main():
     router = dispatch if args.artifacts else step1_tools.dispatch
     instructions = INSTRUCTIONS if args.artifacts else INSTRUCTIONS_NO_STORE
 
-    metrics.header("step 3 — artifact 저장" + ("" if args.artifacts else " (OFF — 대조군)"),
-                   f"{args.deployment} · 질문 {len(ctx['golden'])}개, 그다음 그 전부가 필요한 질문 하나")
+    total = len(ctx["golden"])
+    metrics.header(3, "artifact 저장",
+                   "알아낸 것을 남긴다" if args.artifacts else "남길 데가 없다 — 대조군")
+    metrics.overview(DOES, WATCH, [
+        ("모델", args.deployment),
+        ("저장소", f"켜짐 — {directory}" if args.artifacts else "꺼짐 (대조군)"),
+        ("질문", f"{total}개, 그다음 그 전부가 한꺼번에 필요한 정리 질문 1개"),
+    ])
 
     started = time.perf_counter()
     previous_id = None
     hits = 0
-    for item in ctx["golden"]:
+    for index, item in enumerate(ctx["golden"], start=1):
+        metrics.case(index, total, item["question"])
+        before = len(ctx["run"]["tool_calls"])
         text, previous_id = harness_loop.run_turn(ctx, item["question"], tools, router,
                                                   instructions, previous_id)
-        hit = is_hit(item, text)
-        hits += hit
-        print(f"  {'hit ' if hit else 'miss'} {item['id']}")
+        calls = ctx["run"]["tool_calls"][before:]
+        saved = [c["arguments"].get("name") for c in calls if c["name"] == "save_note" and c["ok"]]
 
+        metrics.used(calls)
+        if saved:
+            print(f"   저장  {', '.join(saved)}")
+        metrics.said(text, limit=140)
+        hit = golden.is_hit(item, text)
+        hits += hit
+        metrics.judged(hit, golden.missing_keys(item, text))
+
+    print(metrics.THIN)
+    print(" [마지막] " + SUMMARY_QUESTION)
     before = len(ctx["run"]["tool_calls"])
     summary, _ = harness_loop.run_turn(ctx, SUMMARY_QUESTION, tools, router,
                                        instructions, previous_id)
-    on_summary = len(ctx["run"]["tool_calls"]) - before
-    print(f"  정리 질문에 tool call {on_summary}회 사용")
+    on_summary = ctx["run"]["tool_calls"][before:]
+    reads = sum(1 for c in on_summary if c["name"] in ("read_note", "list_notes"))
+    searches = sum(1 for c in on_summary if c["name"] == "search_document")
+    metrics.used(on_summary)
+    print(f"   내역  저장해 둔 것 읽기 {reads}번, 문서 다시 검색 {searches}번")
+    metrics.said(summary, limit=200)
 
+    elapsed = time.perf_counter() - started
     rate = reuse_rate(ctx["run"])
-    metrics.report("artifact 저장" + ("" if args.artifacts else " (꺼짐)"),
-                   ctx["run"], time.perf_counter() - started, hits, len(ctx["golden"]),
-                   extra={"artifact reuse": "n/a" if rate is None else f"{rate * 100:.1f}%",
-                          "calls on summary": on_summary,
-                          "notes written": len(list_notes(directory))})
+    repeats = metrics.redundant_work(ctx["run"])
+    headline = (f"정리 질문 하나에 tool call 을 {len(on_summary)}번 썼습니다 — "
+                f"저장해 둔 것 읽기 {reads}번, 문서 재검색 {searches}번. "
+                f"실행 전체에서 완전히 같은 호출을 {repeats}번 반복했습니다.")
 
-    print(f"\n  note: {directory}")
-    print("  redundant calls 는 앞선 호출과 완전히 같았던 호출 수입니다. 저장소가 없으면")
-    print("  정리 질문이 모든 것을 두 번째로 찾아내야 합니다.")
-    print("  다음: step 4 는 시작하기 전에 무엇을 할지 정하게 합니다.")
+    metrics.summary("artifact 저장" + ("" if args.artifacts else " (꺼짐 — 대조군)"),
+                    headline, ctx["run"], elapsed, hits, total,
+                    extra={"저장한 note": f"{len(list_notes(directory))}개",
+                           "artifact reuse": "n/a" if rate is None else f"{rate * 100:.0f}%",
+                           "정리에 쓴 호출": f"{len(on_summary)}번"},
+                    next_up=("--no-artifacts 로 한 번 더 돌려 '정리에 쓴 호출' 을 비교하세요. "
+                             "다음은 step 4, 움직이기 전에 무엇을 할지 정하게 합니다."))
+    print(f" note 는 {directory} 에 있습니다.\n")
 
 
 if __name__ == "__main__":

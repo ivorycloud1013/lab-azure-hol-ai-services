@@ -18,11 +18,19 @@ import os
 import tempfile
 import time
 
+import golden
 import harness_cli
 import harness_loop
 import harness_metrics as metrics
 import step1_tools
-from golden import is_hit
+
+DOES = ("질문들을 하나의 대화 안에서 연달아 묻습니다. 세 가지 방식으로 각각 한 번씩 — "
+        "대화를 통째로 들고 가기(full), 몇 turn 마다 요약으로 접기(summary), "
+        "아무것도 안 들고 필요하면 기록에서 찾기(recall).")
+
+WATCH = ("맨 아래 '호출당 증가' 를 보세요. full 은 turn 이 갈수록 요청이 커지고 나머지 둘은 "
+         "평평합니다. 그다음 맨 끝의 recall check 를 보세요 — 첫 질문을 다시 묻는데, "
+         "그게 평평함의 대가입니다. 평평한데 잊었다면 절약이 아닙니다.")
 
 # step 1 과 같은 문장. 이 단계가 바꾸는 것은 agent 가 turn 사이에 들고 가는 것이지,
 # 어떻게 행동하라고 말해주는 내용이 아니다.
@@ -75,7 +83,9 @@ def run_strategy(ctx, name, directory):
     previous_id = None
     summary = ""
     hits = 0
+    total = len(ctx["golden"])
     for index, item in enumerate(ctx["golden"], start=1):
+        metrics.case(index, total, item["question"])
         prompt = item["question"]
         if name == "recall":
             memory = recall_context(path)
@@ -88,9 +98,12 @@ def run_strategy(ctx, name, directory):
             ctx, prompt, step1_tools.TOOLS, step1_tools.dispatch,
             INSTRUCTIONS, previous_id)
 
-        hit = is_hit(item, text)
+        spent = ctx["run"]["turn_tokens"][-1] if ctx["run"]["turn_tokens"] else 0
+        print(f"   요청  이번 turn 의 input token {spent:,}")
+        metrics.said(text, limit=140)
+        hit = golden.is_hit(item, text)
         hits += hit
-        print(f"  {'hit ' if hit else 'miss'} turn {index}  {item['id']}")
+        metrics.judged(hit, golden.missing_keys(item, text))
 
         if name == "full":
             previous_id = response_id
@@ -118,7 +131,7 @@ def check_recall(ctx, first_item, previous_id=None):
     question = f"앞서 확인한 내용 중, {first_item['question']} 다시 알려주세요."
     text, _ = harness_loop.run_turn(ctx, question, step1_tools.TOOLS,
                                     step1_tools.dispatch, INSTRUCTIONS, previous_id)
-    return is_hit(first_item, text)
+    return golden.is_hit(first_item, text)
 
 
 def parse_args():
@@ -139,22 +152,40 @@ def main():
     base = harness_cli.prepare(args)
     directory = args.out_dir or tempfile.mkdtemp(prefix="harness-context-")
 
+    labels = {"full": "대화를 통째로 들고 간다",
+              "summary": f"{SUMMARIZE_EVERY} turn 마다 요약으로 접는다",
+              "recall": "아무것도 안 들고, 필요하면 기록에서 찾는다"}
     names = ["full", "summary", "recall"] if args.strategy == "all" else [args.strategy]
+
     for name in names:
         ctx = {**base, "run": metrics.new_run()}
-        metrics.header(f"step 2 — context 관리: {name}",
-                       f"{args.deployment} · 한 대화 안에서 {len(ctx['golden'])} turn")
+        metrics.header(2, f"context 관리 · {name}", labels[name])
+        metrics.overview(DOES, WATCH, [
+            ("모델", args.deployment),
+            ("방식", labels[name]),
+            ("turn", f"한 대화 안에서 {len(ctx['golden'])}번, 그다음 recall check 1번"),
+        ])
+
         started = time.perf_counter()
         hits = run_strategy(ctx, name, directory)
         recalled = check_recall(ctx, ctx["golden"][0])
-        metrics.report(f"context 관리 ({name})", ctx["run"],
-                       time.perf_counter() - started, hits, len(ctx["golden"]),
-                       extra={"recall check": "기억함" if recalled else "잊음"})
+        elapsed = time.perf_counter() - started
 
-    print(f"\n  transcript: {directory}")
-    print("  context growth 는 model 호출당 token 을 실행 전체에 회귀시킨 기울기입니다.")
-    print("  곡선이 평평한데 recall 이 '잊음' 이면 그건 절약이 아니라 예정대로 잊은 것입니다.")
-    print("  다음: step 3 은 다시 구할 필요 없는 것을 둘 자리를 만들어 줍니다.")
+        slope = metrics.growth_slope(ctx["run"]["turn_tokens"]) or 0
+        shape = "turn 이 갈수록 요청이 커집니다" if slope > 50 else "요청 크기가 거의 그대로입니다"
+        kept = ("첫 turn 의 내용을 끝까지 기억했습니다"
+                if recalled else "첫 turn 의 내용을 잊었습니다")
+        headline = (f"{len(ctx['golden'])} turn 을 {labels[name]} 방식으로 돌았습니다. "
+                    f"{shape}. 그리고 {kept}.")
+
+        metrics.summary(f"context 관리 · {name}", headline, ctx["run"], elapsed,
+                        hits, len(ctx["golden"]),
+                        extra={"recall check": "기억함" if recalled else "잊음"})
+
+    print(f" transcript 는 {directory} 에 남겼습니다.")
+    print(" 세 방식을 다 돌렸다면 '호출당 증가' 를 나란히 놓고 보세요. 평평한데 recall 이")
+    print(" '잊음' 이면 그건 절약이 아니라 예정대로 잊은 것입니다.")
+    print(" 다음은 step 3, 다시 구할 필요 없는 것을 둘 자리를 만듭니다.\n")
 
 
 if __name__ == "__main__":

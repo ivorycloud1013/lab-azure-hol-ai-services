@@ -53,7 +53,7 @@ export AZURE_AI_PROJECT_ENDPOINT="<foundry-project-endpoint>"
 
 | 단계 | 파일 | 짓는 것 | 보는 숫자 |
 |---|---|---|---|
-| 0 | `step0_baseline.py` | (아무것도 없음) | 기준선. `hit` 이 바닥 |
+| 0 | `step0_baseline.py` | (아무것도 없음) | baseline. `hit` 이 바닥 |
 | 1 | `step1_tools.py` | 스키마 · 디스패처 · 루프 · 실패 처리 | `tool error rate`, `hit` |
 | 2 | `step2_context.py` | 히스토리 · 압축 · 회수 | `context growth`, `recall check` |
 | 3 | `step3_artifacts.py` | 노트 저장 · 읽기 | `redundant calls`, `artifact reuse` |

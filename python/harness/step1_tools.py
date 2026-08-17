@@ -17,13 +17,22 @@ harness_loop.py 에 같은 loop 를 뽑아 두었고 step 2 부터 5 는 거기�
 """
 
 import json
+import os
 import time
 
+import golden
 import harness_cli
 import harness_metrics as metrics
 import harness_tools
-from golden import is_hit
 from harness_metrics import ToolResult
+
+DOES = ("step 0 과 똑같은 질문을 똑같은 모델에게 묻습니다. 달라진 것은 하나뿐입니다 — "
+        "모델이 문서를 검색하고 읽을 수 있는 tool 두 개를 줍니다.")
+
+WATCH = ("답이 맞아지는 것보다, 모델이 몇 번을 오가며 무엇을 검색하는지 보세요. "
+         "--show-tools 를 켜면 검색어가 그대로 보입니다. "
+         "그리고 --broken-tools 로 한 번 더 돌려서, 실패 처리만 뺐을 때 실행이 "
+         "어떻게 죽는지 확인하세요.")
 
 INSTRUCTIONS = (
     "당신은 한국 주택시장 보고서 하나에 대해 답합니다. "
@@ -161,23 +170,53 @@ def parse_args():
 def main():
     args = parse_args()
     ctx = {**harness_cli.prepare(args), "run": metrics.new_run()}
+    total = len(ctx["golden"])
+    broken = args.broken_tools
 
-    metrics.header("step 1 — tool call" + (" (실패 처리 OFF)" if args.broken_tools else ""),
-                   f"{args.deployment} · 질문 {len(ctx['golden'])}개 · grep 은 모든 단계와 동일")
+    metrics.header(1, "tool call", "모델에게 문서를 찾을 손을 준다"
+                   + (" — 실패 처리는 뺀 채로" if broken else ""))
+    metrics.overview(DOES, WATCH, [
+        ("모델", args.deployment),
+        ("문서", f"{os.path.basename(args.file)} ({len(ctx['lines'])}줄) — 이제 검색할 수 있습니다"),
+        ("tool", "search_document, read_lines — grep 과 sed, 모든 단계에서 동일"),
+        ("실패 처리", "꺼짐 (예외가 그대로 올라옴)" if broken else "켜짐 (문장으로 되돌려줌)"),
+    ])
 
     started = time.perf_counter()
     hits = 0
-    for item in ctx["golden"]:
+    for index, item in enumerate(ctx["golden"], start=1):
+        metrics.case(index, total, item["question"])
+        before = len(ctx["run"]["tool_calls"])
         text = answer(ctx, item["question"])
-        hit = is_hit(item, text)
-        hits += hit
-        print(f"  {'hit ' if hit else 'miss'} {item['id']}")
+        calls = ctx["run"]["tool_calls"][before:]
 
-    metrics.report("tool call", ctx["run"], time.perf_counter() - started,
-                   hits, len(ctx["golden"]))
-    print("\n  tool error rate 는 dispatcher 가 거부한 호출의 비율입니다. 이게 숫자로 나오는")
-    print("  이유는 실패가 반환값이기 때문입니다 — harness_metrics.py 의 ToolResult 참고.")
-    print("  다음: step 2 는 질문 하나로 끝나지 않을 때 무슨 일이 생기는지 봅니다.")
+        metrics.used(calls)
+        metrics.said(text)
+        hit = golden.is_hit(item, text)
+        hits += hit
+
+        note = None
+        empty = sum(1 for call in calls if not call["ok"])
+        if not hit and empty:
+            note = (f"검색 {empty}번이 빈손이었습니다. dispatcher 가 무엇을 찾다 실패했는지 "
+                    "되돌려줬는지, 그래서 모델이 다른 말로 다시 시도했는지 보세요.")
+        elif not hit and not calls:
+            note = "검색을 한 번도 하지 않았습니다. instructions 가 시켰는데도 그렇습니다."
+        metrics.judged(hit, golden.missing_keys(item, text), note)
+
+    elapsed = time.perf_counter() - started
+    empty = sum(1 for call in ctx["run"]["tool_calls"] if not call["ok"])
+    headline = (f"질문 {total}개 중 {hits}개를 맞혔습니다. "
+                f"검색과 읽기를 합쳐 {len(ctx['run']['tool_calls'])}번 불렀고 "
+                f"그중 {empty}번은 빈손으로 돌아왔습니다. "
+                "grep 자체는 step 0 이후로 한 글자도 바뀌지 않았습니다.")
+
+    metrics.summary(
+        "tool call" + (" (실패 처리 꺼짐)" if broken else ""),
+        headline, ctx["run"], elapsed, hits, total,
+        next_up=("빈손 비율이 tool error rate 입니다. 이게 숫자로 나오는 이유는 실패가 "
+                 "문자열이 아니라 반환값이기 때문입니다 — harness_metrics.py 의 ToolResult. "
+                 "다음은 step 2, 질문 하나로 끝나지 않을 때 무엇을 들고 다닐지의 문제입니다."))
 
 
 if __name__ == "__main__":

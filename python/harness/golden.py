@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DOCUMENT = os.path.join(PYTHON_DIR, "assets", "tools", "KB주택시장리뷰_2025년 10월호.md")
@@ -85,3 +86,17 @@ def is_hit(item, text):
     """정답 문자열이 전부 들어 있어야 한다. 모델을 안 쓰니 공짜이고, 몇 번을 돌려도 같은 답이
     나온다. 그래서 모든 리포트의 첫 줄이 이 숫자다."""
     return all(key in text for key in item["answer_key"])
+
+
+def missing_keys(item, text):
+    """답변에서 빠진 정답 문자열. miss 를 찍을 때 무엇이 없어서 miss 인지 같이 말해준다.
+
+    "miss" 만 찍으면 학습자는 답을 눈으로 훑으며 뭐가 틀렸는지 직접 찾아야 한다. 세 값 중
+    둘은 맞고 하나만 틀린 경우가 특히 그런데, 그건 정답에 가까운 실패라 오히려 볼 값어치가 있다.
+    """
+    return [key for key in item["answer_key"] if key not in text]
+
+
+def citations(text):
+    """답변이 단 [line N] 인용 번호. step 0 에서 지어낸 인용을 세는 데 쓴다."""
+    return re.findall(r"\[line\s*(\d+)\]", text)

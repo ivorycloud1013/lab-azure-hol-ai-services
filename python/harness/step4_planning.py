@@ -17,12 +17,20 @@ adherence 와 backtracks 를 잴 수 있는 건 오직 계획이 모델 머릿�
 import time
 from typing import Literal
 
+import golden
 import harness_cli
 import harness_loop
 import harness_metrics as metrics
 import step1_tools
-from golden import is_hit
 from pydantic import BaseModel, Field
+
+DOES = ("답하기 전에 모델에게 조사 계획을 먼저 세우게 합니다. 계획은 자유 서술이 아니라 "
+        "'어떤 tool 을 왜 부를지' 의 목록으로 받습니다. 그다음 그 계획대로 실행시키고, "
+        "실제 호출을 계획과 대조합니다.")
+
+WATCH = ("질문마다 호출 수를 보세요. 계획을 세우는 호출 하나가 앞에서 더 들어가는데, "
+         "그만큼을 뒤에서 돌려받는지가 이 레이어의 값어치입니다. "
+         "--no-plan 으로 한 번 더 돌려 '평균 호출' 을 비교하세요.")
 
 INSTRUCTIONS = step1_tools.INSTRUCTIONS
 
@@ -108,20 +116,28 @@ def main():
     args = parse_args()
     ctx = {**harness_cli.prepare(args), "run": metrics.new_run()}
 
-    metrics.header("step 4 — planning" + ("" if args.plan else " (OFF — 대조군)"),
-                   f"{args.deployment} · 질문 {len(ctx['golden'])}개")
+    total = len(ctx["golden"])
+    metrics.header(4, "planning",
+                   "먼저 수를 정하고 움직인다" if args.plan else "계획 없이 반응만 한다 — 대조군")
+    metrics.overview(DOES, WATCH, [
+        ("모델", args.deployment),
+        ("계획", "켜짐 (질문마다 계획 호출 1번 추가)" if args.plan else "꺼짐 (대조군)"),
+        ("질문", f"{total}개"),
+    ])
 
     started = time.perf_counter()
     hits = 0
     adherences, backtracks, steps_to_answer = [], 0, []
-    for item in ctx["golden"]:
+    for index, item in enumerate(ctx["golden"], start=1):
+        metrics.case(index, total, item["question"])
         before = len(ctx["run"]["tool_calls"])
 
         steps = make_plan(ctx, item["question"]) if args.plan else []
+        if steps:
+            print("\n   계획")
+            for number, step in enumerate(steps, start=1):
+                print(f"     {number}. {step.tool} — {step.why}")
         prompt = plan_as_prompt(item["question"], steps) if steps else item["question"]
-        if steps and args.show_tools:
-            for step in steps:
-                print(f"    계획: {step.tool} — {step.why}")
 
         text, _ = harness_loop.run_turn(ctx, prompt, step1_tools.TOOLS,
                                         step1_tools.dispatch, INSTRUCTIONS)
@@ -133,22 +149,35 @@ def main():
         backtracks += off_plan if steps else 0
         steps_to_answer.append(len(calls))
 
-        hit = is_hit(item, text)
+        metrics.used(calls)
+        if steps:
+            print(f"   대조  계획 {len(steps)}단계 중 {adherence * len(steps):.0f}단계 실행, "
+                  f"계획에 없던 호출 {off_plan}번")
+        metrics.said(text, limit=140)
+        hit = golden.is_hit(item, text)
         hits += hit
-        print(f"  {'hit ' if hit else 'miss'} {item['id']}  호출 {len(calls)}회")
+        metrics.judged(hit, golden.missing_keys(item, text))
 
+    elapsed = time.perf_counter() - started
     average = sum(steps_to_answer) / len(steps_to_answer) if steps_to_answer else 0
-    extra = {"steps to answer": f"평균 {average:.1f}"}
+    extra = {"평균 호출": f"질문당 {average:.1f}번"}
     if adherences:
-        extra["plan adherence"] = f"{sum(adherences) / len(adherences) * 100:.1f}%"
-        extra["backtracks"] = backtracks
+        extra["계획 준수"] = f"{sum(adherences) / len(adherences) * 100:.0f}%"
+        extra["계획 밖 호출"] = f"{backtracks}번"
 
-    metrics.report("planning" + ("" if args.plan else " (꺼짐)"), ctx["run"],
-                   time.perf_counter() - started, hits, len(ctx["golden"]), extra=extra)
+    if args.plan:
+        headline = (f"질문 하나에 평균 {average:.1f}번 호출했습니다. 계획을 세우는 호출이 "
+                    f"질문마다 하나씩 더 들어갔고, 계획에 없던 호출이 모두 {backtracks}번 "
+                    "있었습니다.")
+    else:
+        headline = (f"계획 없이 반응만 했을 때 질문 하나에 평균 {average:.1f}번 호출했습니다. "
+                    "계획을 켠 실행의 같은 숫자와 비교하세요.")
 
-    print("\n  계획을 세우는 호출도 공짜가 아닙니다 — turns 와 input tokens 에 그대로 잡힙니다.")
-    print("  이 레이어가 값어치를 하느냐는, steps to answer 가 그보다 더 줄었느냐입니다.")
-    print("  다음: step 5 는 이 모든 것을 확인 가능하게 만들어, 다음 변경을 잴 수 있게 합니다.")
+    metrics.summary("planning" + ("" if args.plan else " (꺼짐 — 대조군)"),
+                    headline, ctx["run"], elapsed, hits, total, extra=extra,
+                    next_up=("계획 호출도 공짜가 아니라 model 호출과 input token 에 그대로 "
+                             "잡힙니다. 값어치를 하느냐는 '평균 호출' 이 그보다 더 줄었느냐입니다. "
+                             "다음은 step 5, 지금까지의 변경을 잴 수 있게 만듭니다."))
 
 
 if __name__ == "__main__":
