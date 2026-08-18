@@ -9,16 +9,26 @@
 
     "이 답이 근거로 댄 자리가, 이 답을 실제로 뒷받침하는가?"
 
-이건 정답 없이도 확인할 수 있고, 놀랍게도 오답의 상당수가 여기서 걸린다. 옆 칸 값을 집어 온
-답은 대개 근거를 못 대거나, 대더라도 그 자리가 그 값을 그 대상의 것으로 지목해 주지 않는다.
+이건 정답 없이도 확인할 수 있고, 놀랍게도 오답의 상당수가 여기서 걸린다.
 
-검증을 두 겹으로 나눈 것도 의도다.
+여기에 이 랩의 코퍼스가 요구하는 겹이 하나 더 붙는다. 코퍼스에는 같은 보고서가 두 판 들어
+있고, 하나는 이미 대체되었다. 문서 어디에도 그 사실이 적혀 있지 않아서 **모델은 알 수 없고,
+하네스는 안다.** 그게 정답을 아는 것과 어떻게 다른지가 중요하다 —
 
-    1. 결정론 검사   인용이 있나, 그 줄에 그 수치가 정말 있나.  모델 호출 0번, 공짜
-    2. 근거 판정     그 줄이 질문이 물은 대상의 값이라고 확정해 주나.  모델 호출 1번, 유료
+    하네스가 아는 것:  어느 문서가 살아 있는가          (문서 관리 메타데이터)
+    하네스가 모르는 것: 서울 청약 경쟁률이 얼마인가        (정답)
+
+그래서 규칙은 그대로다. 검증은 여전히 답이 맞는지 묻지 않는다. 다만 **대체된 문서에만 있는
+수치**는 근거가 될 수 없다고 말할 수 있다.
+
+검증을 세 겹으로 나눈 것도 의도다.
+
+    1. 결정론 · 인용   인용이 있나, 그 줄에 그 수치가 정말 있나.        모델 호출 0번, 공짜
+    2. 결정론 · 판     대체된 문서에만 있는 수치를 말하고 있나.          모델 호출 0번, 공짜
+    3. 근거 판정       그 줄이 질문이 물은 대상의 값이라고 확정해 주나.   모델 호출 1번, 유료
 
 싼 것이 먼저 거른다. 이 순서를 뒤집으면 지어낸 인용 하나를 잡는 데 judge 비용을 낸다.
-그리고 2번 판정자에게는 **정답을 주지 않는다.** 답안지를 쥔 판정자는 채점 기계이지 하네스가
+그리고 3번 판정자에게는 **정답을 주지 않는다.** 답안지를 쥔 판정자는 채점 기계이지 하네스가
 아니고, 실전에서는 존재하지 않는다.
 """
 
@@ -26,11 +36,12 @@ import re
 
 from pydantic import BaseModel, Field
 
+import golden
 import harness_tools
 
-# 인용 형식. [line 118] 과 [line 118-122] 를 함께 받는다 — 범위로 다는 모델이 흔하고,
-# 그걸 형식 위반으로 반려하면 검증이 잡으려던 것 대신 형식만 잡게 된다.
-CITATION = re.compile(r"\[line\s*(\d+)(?:\s*[-~]\s*(\d+))?\]")
+# 인용 형식. [문서 line 118] 과 [문서 line 118-122] 를 함께 받는다 — 범위로 다는 모델이
+# 흔하고, 그걸 형식 위반으로 반려하면 검증이 잡으려던 것 대신 형식만 잡게 된다.
+CITATION = re.compile(r"\[([\w.-]+)\s+line\s*(\d+)(?:\s*[-~]\s*(\d+))?\]")
 
 # 답변에서 뽑아낼 수치. 0.24% · 152.1 · 932.7조 · 9.6대 1 · 4천4백 을 한 덩어리로 본다.
 NUMBER = re.compile(r"\d+(?:\.\d+)?(?:%|조|억|만|천|호|배)?")
@@ -84,30 +95,36 @@ class Verdict:
 
 
 def cited_ranges(text):
-    """답변이 단 인용을 (시작, 끝) 목록으로. 범위 표기는 그대로, 단일 표기는 여백을 붙인다."""
+    """답변이 단 인용을 (문서, 시작, 끝) 목록으로. 범위 표기는 그대로, 단일 표기는 여백을 붙인다."""
     ranges = []
-    for start, end in CITATION.findall(text):
+    for document, start, end in CITATION.findall(text):
         first = int(start)
         last = int(end) if end else first
         if last < first:
             first, last = last, first
-        ranges.append((max(1, first - CITATION_MARGIN), last + CITATION_MARGIN))
+        ranges.append((document, max(1, first - CITATION_MARGIN), last + CITATION_MARGIN))
     return ranges
 
 
-def cited_text(path, ranges):
-    """인용한 자리의 원문을 읽어 온다. 모델이 아니라 하네스가 직접 읽는 것이 핵심이다.
+def cited_text(corpus, ranges):
+    """인용한 자리의 원문을, 인용이 가리킨 그 문서에서 읽어 온다.
 
-    모델에게 "네 근거를 다시 읽어봐" 라고 시키면 모델은 자기가 기억하는 것을 다시 말한다.
-    파일에서 잘라 와야 기억과 파일이 어긋난 순간이 드러난다.
+    모델이 아니라 하네스가 직접 읽는 것이 핵심이다. 모델에게 "네 근거를 다시 읽어봐" 라고
+    시키면 모델은 자기가 기억하는 것을 다시 말한다. 파일에서 잘라 와야 기억과 파일이 어긋난
+    순간이 드러난다.
+
+    없는 문서를 가리키는 인용은 조용히 건너뛴다. 그러면 읽어온 것이 비고, 호출부가 "빈 근거"
+    로 반려한다 — 지어낸 인용과 같은 자리에서 잡히는 것이 맞다.
     """
     budget = MAX_CITED_LINES
     pieces = []
-    for first, last in ranges:
+    for document, first, last in ranges:
         if budget <= 0:
             break
+        if document not in corpus:
+            continue
         count = min(last - first + 1, budget)
-        pieces.append(harness_tools.read(path, first, count))
+        pieces.append(harness_tools.read(corpus[document]["path"], first, count))
         budget -= count
     return "\n".join(piece for piece in pieces if piece)
 
@@ -130,26 +147,72 @@ def numbers_in(text):
             if any(ch.isdigit() for ch in match) and _significant(match)}
 
 
-def check_deterministic(path, answer):
-    """모델 없이 되는 검사 둘. 통과하면 None 을 돌려준다.
+def said_numbers(corpus, answer):
+    """답변이 *주장한* 수치만 뽑는다. 문서를 가리키는 숫자는 주장이 아니다.
 
-    여기서 잡히는 것은 형식 문제가 아니라 실체 문제다 — 근거를 안 댄 수치, 그리고 댄 자리에
-    실제로는 없는 수치. 뒤쪽이 step 0 에서 본 지어낸 인용의 정체이고, tool 을 쥐여준 뒤에도
-    줄 번호가 한두 줄씩 밀린 형태로 계속 나온다.
+    지울 것이 둘이다. 인용 마커의 줄 번호를 세면 근거로 댄 줄 번호가 곧 그 답의 근거가 되어
+    버린다 — 어떤 인용이든 자기 자신을 뒷받침하게 된다. 그리고 문서 이름의 숫자를 세면
+    (KB-2510-4471 의 2510 과 4471) 문서 이름을 본문에 적은 답이 그것만으로 반려된다.
+    실제로 두 판을 나란히 적는 답이 문서 이름을 라벨로 쓴다.
     """
-    # 인용 마커를 먼저 지운다. [line 627] 의 627 을 답변이 말한 수치로 세면, 근거로 댄 줄
-    # 번호가 곧 그 답의 근거가 되어 버린다 — 어떤 인용이든 자기 자신을 뒷받침하게 된다.
-    said = numbers_in(CITATION.sub(" ", answer))
+    text = CITATION.sub(" ", answer)
+    for document in corpus:
+        text = text.replace(document, " ")
+    return numbers_in(text)
+
+
+def check_edition(corpus, answer, ranges):
+    """대체된 문서를 근거로 들었고, 그 수치가 현행 판에는 없을 때 반려한다. 모델 호출 0번.
+
+    두 조건을 다 걸어야 하는 이유가 이 검사의 전부다. 대체된 문서를 인용했다는 것만으로
+    반려하면, 두 판에서 값이 똑같은 수치까지 되돌리게 된다. 답은 멀쩡한데 값을 치르고
+    뭉개는 것 — 리포트의 '헛수고' 칸이 그래서 오른다. 실제로 이 랩의 대조군 세 문항이
+    전부 거기 걸린다.
+
+    그래서 묻는 것은 "폐기된 문서를 봤나" 가 아니라 **"그 수치가 살아 있는 판에도 있나"** 다.
+    없으면 그 답은 대체된 내용에 기대고 있는 것이고, 있으면 어느 판에서 읽었든 상관없다.
+
+    하네스가 여기서 쓰는 지식은 정답이 아니라 어느 문서가 현행인가 하나뿐이다. 정정된 값이
+    무엇인지는 보지 않고, 모델에게도 말해주지 않는다.
+    """
+    stale = sorted({document for document, _, _ in ranges if golden.is_superseded(document)})
+    if not stale:
+        return None
+
+    current = golden.CURRENT_EDITION
+    if current not in corpus:
+        return None
+    living = "\n".join(corpus[current]["lines"])
+    said = said_numbers(corpus, answer)
+    gone = [value for value in sorted(said) if value not in living]
+    if not gone:
+        return None
+
+    shown = ", ".join(gone[:3])
+    return Verdict(False, "폐기된 판",
+                   f"{', '.join(stale)} 는 {current} 로 대체된 문서이고, "
+                   f"답변의 수치({shown})는 {current} 에 없습니다.",
+                   f"{current} 에서 다시 찾아 그 문서를 근거로 답하세요.", ranges)
+
+
+def check_deterministic(corpus, answer):
+    """모델 없이 되는 검사들. 통과하면 None 을 돌려준다.
+
+    여기서 잡히는 것은 형식 문제가 아니라 실체 문제다 — 근거를 안 댄 수치, 댄 자리에 실제로는
+    없는 수치, 그리고 이미 대체된 문서에만 있는 수치. 두 번째가 step 0 에서 본 지어낸 인용의
+    정체이고, 세 번째가 이 코퍼스가 새로 만들어내는 실패다.
+    """
+    said = said_numbers(corpus, answer)
     if not said:
         return Verdict(False, "수치 없음", "답변에 수치가 없습니다.",
                        "질문이 요구한 수치를 문서에서 찾아 제시하세요.")
 
     ranges = cited_ranges(answer)
     if not ranges:
-        return Verdict(False, "근거 없음", "수치를 말했지만 [line N] 근거가 없습니다.",
-                       "그 수치가 실제로 적힌 줄 번호를 찾아 함께 다세요.")
+        return Verdict(False, "근거 없음", "수치를 말했지만 [문서 line N] 근거가 없습니다.",
+                       "그 수치가 실제로 적힌 문서와 줄 번호를 찾아 함께 다세요.")
 
-    source = cited_text(path, ranges)
+    source = cited_text(corpus, ranges)
     if not source.strip():
         return Verdict(False, "빈 근거", "인용한 줄 번호가 문서 범위 밖이거나 비어 있습니다.",
                        "문서를 다시 검색해 실제로 존재하는 줄을 인용하세요.", ranges)
@@ -162,7 +225,9 @@ def check_deterministic(path, answer):
                        f"인용한 줄에 답변의 수치({shown})가 없습니다.",
                        "그 수치가 실제로 적힌 자리를 다시 검색해 인용하세요.", ranges)
 
-    return None
+    # 마지막이 판 검사다. 인용이 실제로 존재하고 그 자리에 수치가 있다는 것까지 확인한 뒤에
+    # 물어야, "폐기된 판" 이라는 사유가 지어낸 인용과 섞이지 않는다.
+    return check_edition(corpus, answer, ranges)
 
 
 def check_grounding(ctx, question, answer, source):
@@ -202,14 +267,14 @@ def _count(run, usage):
 
 def verify(ctx, item, answer):
     """한 답변에 대한 최종 판정. 결정론 검사 → 근거 판정 순서로 간다."""
-    path = ctx["args"].file
+    corpus = ctx["corpus"]
 
-    failed = check_deterministic(path, answer)
+    failed = check_deterministic(corpus, answer)
     if failed is not None:
         return failed
 
     ranges = cited_ranges(answer)
-    source = cited_text(path, ranges)
+    source = cited_text(corpus, ranges)
     grounding = check_grounding(ctx, item["question"], answer, source)
     if grounding.supported:
         return Verdict(True, "통과", cited=ranges)

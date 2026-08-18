@@ -8,7 +8,6 @@ tool 도, 문서도, 기억도 없다. 질문 하나에 요청 하나, 답 하�
 대상을 손에 쥐고 있자는 겁니다.
 """
 
-import os
 import time
 
 import golden
@@ -20,17 +19,18 @@ import harness_metrics as metrics
 # hit 이 오른 것을 문구 덕으로 돌릴 수 있게 되고, step 1 은 tool 에 대해 아무것도 증명하지
 # 못하게 된다.
 INSTRUCTIONS = (
-    "당신은 한국 주택시장 보고서 하나에 대해 답합니다. "
-    "보고하는 모든 수치에 근거를 [line N] 형식으로 다세요. N 은 그 수치가 나온 줄 번호입니다. "
+    "당신은 한국 주택시장 보고서에 대해 답합니다. 문서는 여럿일 수 있습니다. "
+    "보고하는 모든 수치에 근거를 [문서이름 line N] 형식으로 다세요. "
+    "문서이름은 그 수치가 나온 문서의 이름이고, N 은 줄 번호입니다. "
     "찾지 못했으면 추측하지 말고 찾지 못했다고 말하세요. 질문한 언어로 답하세요."
 )
 
 DOES = ("보고서 하나에 대한 질문을 모델에게 그냥 물어봅니다. tool 도, 문서도, 앞 질문의 "
         "기억도 주지 않습니다. 모델은 자기가 이미 아는 것만으로 답해야 합니다.")
 
-WATCH = ("맞고 틀리고보다, 틀릴 때 어떻게 틀리는지를 보세요. 근거를 [line 118] 처럼 달라고 "
-         "시켰는데 모델에게는 볼 문서가 없습니다. 그런데도 줄 번호를 답니다. "
-         "그 줄 번호가 어디서 왔는지가 이 단계의 전부입니다.")
+WATCH = ("맞고 틀리고보다, 틀릴 때 어떻게 틀리는지를 보세요. 근거를 "
+         "[문서이름 line 118] 처럼 달라고 시켰는데 모델에게는 볼 문서가 없습니다. "
+         "그런데도 문서 이름과 줄 번호를 답니다. 그게 어디서 왔는지가 이 단계의 전부입니다.")
 
 
 def parse_args():
@@ -55,8 +55,7 @@ def main():
     metrics.header(0, "baseline", "하네스 없이 모델만")
     metrics.overview(DOES, WATCH, [
         ("모델", args.deployment),
-        ("문서", f"{os.path.basename(args.file)} ({len(ctx['lines'])}줄) "
-                 "— 모델에게는 주지 않습니다"),
+        ("코퍼스", f"문서 {len(ctx['corpus'])}개 — 모델에게는 주지 않습니다"),
         ("질문", f"{total}개"),
     ])
 
@@ -75,8 +74,8 @@ def main():
 
         note = None
         if cited:
-            shown = ", ".join(f"line {n}" for n in cited[:3])
-            note = f"인용한 줄 {shown} — 모델은 이 문서를 본 적이 없습니다. 지어낸 번호입니다."
+            shown = ", ".join(f"{document} line {n}" for document, n in cited[:3])
+            note = f"인용한 자리 {shown} — 모델은 이 문서를 본 적이 없습니다. 지어낸 것입니다."
         elif not hit:
             note = "인용이 없습니다. 모르는 것을 모른다고 말한 쪽입니다."
         metrics.judged(hit, golden.missing_keys(item, answer), note)

@@ -30,8 +30,8 @@ def build_parser(description, epilog=None):
 
     identity.add_auth_arguments(parser)
 
-    parser.add_argument("--file", default=golden.DEFAULT_DOCUMENT, metavar="MD",
-                        help="질문의 근거가 되는 markdown 문서")
+    parser.add_argument("--corpus", default=golden.DEFAULT_CORPUS, metavar="DIR",
+                        help="질문의 근거가 되는 markdown 문서들이 있는 디렉터리")
     parser.add_argument("--questions", type=int, default=len(golden.GOLDEN),
                         help=f"골든 세트 {len(golden.GOLDEN)}문항 중 앞에서부터 몇 개를 물을지")
     parser.add_argument("--show-tools", action="store_true",
@@ -42,8 +42,8 @@ def build_parser(description, epilog=None):
 def finish_parsing(parser):
     """모든 단계가 하는 검증. 단계 고유 검증은 이 뒤에 붙인다."""
     args = parser.parse_args()
-    if not os.path.isfile(args.file):
-        parser.error(f"{args.file} 를 찾을 수 없습니다")
+    if not os.path.isdir(args.corpus):
+        parser.error(f"{args.corpus} 를 찾을 수 없습니다")
     if not 1 <= args.questions <= len(golden.GOLDEN):
         parser.error(f"--questions 는 1 에서 {len(golden.GOLDEN)} 사이여야 합니다")
     return args
@@ -62,12 +62,18 @@ def create_client(args):
 
 
 def prepare(args):
-    """문서와 질문을 한 번만 읽어, 각 단계가 들고 다닐 context 를 만든다."""
-    document, lines = golden.load_document(args.file)
+    """코퍼스와 질문을 한 번만 읽어, 각 단계가 들고 다닐 context 를 만든다.
+
+    corpus 는 문서 이름 → {path, lines} 다. 검색이 무엇을 훑을지, 인용된 문서를 어디서
+    읽을지가 전부 여기서 나온다. **어느 판이 유효한지는 여기 없다** — 그건 golden 의
+    EDITIONS 이고, step 2 의 검증만 읽는다.
+    """
+    corpus = golden.load_corpus(args.corpus)
+    if not corpus:
+        raise SystemExit(f"{args.corpus} 에 markdown 문서가 없습니다")
     return {
         "client": create_client(args),
         "args": args,
-        "document": document,
-        "lines": lines,
-        "golden": golden.resolve_golden(lines, args.questions),
+        "corpus": corpus,
+        "golden": golden.resolve_golden(corpus, args.questions),
     }

@@ -29,9 +29,11 @@ DOES = ("step 1 과 똑같이 묻습니다. 달라진 것은, 모델이 답을 �
         "줄을 직접 읽어 근거가 맞물리는지 확인한다는 것입니다. 안 맞물리면 사유를 붙여 "
         "돌려보내고 다시 조사시킵니다.")
 
-WATCH = ("첫 시도의 답과 마지막 답을 견주세요. 첫 시도에서 옆 칸 값을 집어 온 질문이 몇 개인지가 "
-         "step 1 이 그대로 내보내던 오답의 양입니다. 그리고 '헛수고' 를 보세요 — 맞는 답을 "
-         "반려한 횟수입니다. 검증은 오답만 잡는 게 아니라 정답도 붙잡습니다.")
+WATCH = ("첫 시도의 답과 마지막 답을 견주세요. 첫 시도에서 대체된 문서를 근거로 든 질문이 "
+         "몇 개인지가 step 1 이 그대로 내보내던 오답의 양입니다. 하네스가 새로 아는 것은 "
+         "하나뿐입니다 — 어느 문서가 살아 있는가. 정답은 여전히 모릅니다. "
+         "그리고 '헛수고' 를 보세요 — 맞는 답을 반려한 횟수입니다. 검증은 오답만 잡는 게 "
+         "아니라 정답도 붙잡습니다.")
 
 # step 1 과 같은 문장을 쓴다. 지시문까지 손대면 hit 이 오른 것을 문구 덕으로 돌릴 수 있게 되고,
 # 그러면 이 단계는 검증에 대해 아무것도 증명하지 못한다.
@@ -98,6 +100,7 @@ def tally(results):
     wasted = sum(1 for r in results for a in r["attempts"]
                  if a["hit"] and a["verdict"] is not None and not a["verdict"].ok)
     cheap = sum(1 for v in rejections if v.rule != "근거 부족")
+    stale = sum(1 for v in rejections if v.rule == "폐기된 판")
     tries = sum(len(r["attempts"]) for r in results)
     return {
         "first_wrong": first_wrong,
@@ -105,6 +108,7 @@ def tally(results):
         "stuck": stuck,
         "rejections": len(rejections),
         "cheap": cheap,
+        "stale": stale,
         "wasted": wasted,
         "attempts": tries / len(results) if results else 0,
     }
@@ -154,8 +158,11 @@ def main():
                    if args.verify else "검증을 뺀 대조군 — step 1 과 같다")
     metrics.overview(DOES, WATCH, [
         ("모델", args.deployment),
-        ("검증", f"켜짐 — 결정론 검사 + 근거 판정, 질문당 최대 {MAX_ATTEMPTS}번 시도"
+        ("검증", f"켜짐 — 결정론 검사 + 판 검사 + 근거 판정, 질문당 최대 {MAX_ATTEMPTS}번 시도"
                  if args.verify else "꺼짐 (대조군)"),
+        ("판 정보", f"있음 — 현행 {golden.CURRENT_EDITION}, "
+                    f"대체됨 {', '.join(golden.SUPERSEDED_EDITIONS)}"
+                    if args.verify else "없음 (대조군 — step 1 과 같습니다)"),
         ("질문", f"{total}개"),
     ])
 
@@ -188,6 +195,7 @@ def main():
     if args.verify:
         extra.update({
             "하네스 반려": f"{counts['rejections']}번 (모델 없이 잡은 것 {counts['cheap']}번)",
+            "폐기 판 반려": f"{counts['stale']}번 (대체된 문서에만 있는 수치)",
             "재시도로 교정": f"{counts['fixed']}개",
             "재시도 실패": f"{counts['stuck']}개",
             "헛수고": f"{counts['wasted']}번 (맞는 답을 반려)",
