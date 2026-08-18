@@ -9,7 +9,6 @@ Foundry 을 CLI에서 직접 호출해 보는 hands-on 스크립트 collection �
   pip install -r requirements.txt
   az login
   ```
-- [Foundry Harness](#foundry-harness) 절만 채점기가 따로 필요합니다 — `pip install -r harness/requirements.txt`
 
 ## 공통 인증
 
@@ -1005,7 +1004,7 @@ python hol-foundry-observability-af-single.py `
 그대로 나간다.** ①은 툴을 붙이면 끝나고, 데모는 대개 거기서 멈춥니다.
 **이 랩의 본론은 ②와 ③입니다.**
 
-코퍼스에는 같은 보고서가 두 판 들어 있고, 하나는 이미 대체되었습니다. 문서 어디에도 그
+코퍼스에는 같은 보고서의 edition 이 둘 들어 있고, 하나는 이미 대체되었습니다. 문서 어디에도 그
 사실이 적혀 있지 않아 **모델은 알 수 없고, 하네스는 압니다.** 시나리오는 step 2 에서
 닫힙니다 — step 1 이 틀리고, step 2 가 잡고, 모델이 고쳐 옵니다.
 
@@ -1017,19 +1016,17 @@ python hol-foundry-observability-af-single.py `
 |---|---|
 | [`harness/step0_baseline.py`](harness/README.md) | 하네스 없이 모델만 — 문서가 없으니 지어낸다 |
 | [`harness/step1_tools.py`](harness/README.md) | 툴 호출 레이어 : 스키마 · 디스패처 · 루프 · 실패 처리 — 찾아오는데 대체된 문서에서 찾아온다 |
-| [`harness/step2_verify.py`](harness/README.md) | 검증 레이어 : 근거 확인 · 판 검사 · 반려 · 재시도 — 오답을 알아채고 다시 찾는다 |
-| [`harness/step3_eval.py`](harness/README.md) | 평가 레이어 : 골든 세트로 회귀 잡기 |
+| [`harness/step2_verify.py`](harness/README.md) | 검증 레이어 : 근거 확인 · edition 검사 · 반려 · 재시도 — 오답을 알아채고 다시 찾는다 |
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
 flowchart TB
     CAP["harness_tools.py </br> grep · sed — 능력, 전 단계 고정"]
     S0["step 0 </br> 하네스 없음 </br> 지어낸다"] --> S1["step 1 </br> 툴 호출 </br> 자신 있게 틀린다"]
-    S1 --> S2["step 2 </br> 검증 · 재시도 </br> 알아채고 다시 찾는다"] --> S3["step 3 </br> 평가"]
+    S1 --> S2["step 2 </br> 검증 · 재시도 </br> 알아채고 다시 찾는다"]
     CAP -.-> S1
     CAP -.-> S2
-    CAP -.-> S3
-    S3 --> R["같은 형식의 지표 리포트 </br> harness_metrics.py"]
+    S2 --> R["같은 형식의 지표 리포트 </br> harness_metrics.py"]
 ```
 
 검색 능력(`harness_tools.py`)은 **전 단계에서 한 글자도 바뀌지 않습니다.** 지시문도 step 1 부터
@@ -1037,7 +1034,7 @@ flowchart TB
 하네스가 한 일입니다.
 
 step 2 의 규칙 하나만 기억하면 됩니다. **하네스는 정답을 모릅니다.** 그래서 "이 답이 맞는가"
-대신 **"이 답이 근거로 댄 자리가 이 답을 실제로 뒷받침하는가"** 를 묻습니다. 여기에 판 검사가
+대신 **"이 답이 근거로 댄 자리가 이 답을 실제로 뒷받침하는가"** 를 묻습니다. 여기에 edition 검사가
 한 겹 붙는데, 그때도 하네스가 아는 것은 정답이 아니라 **어느 문서가 살아 있는가** 하나뿐입니다.
 
 | 공통 인자 | 기본값 | 설명 |
@@ -1048,13 +1045,11 @@ step 2 의 규칙 하나만 기억하면 됩니다. **하네스는 정답을 모
 | `--questions` | `6` | 골든 세트에서 앞에서부터 몇 문항 |
 | `--show-tools` | 끔 | 에이전트가 부른 툴과 인자를 그대로 출력 |
 
-단계별 고유 인자는 `--broken-tools`(step 1) · `--no-verify`(step 2) ·
-`--baseline` `--judge`(step 3) 입니다. 각각 **대조군**이라, 그 하나를 껐을 때 숫자가 어떻게
+단계별 고유 인자는 `--broken-tools`(step 1) · `--no-verify`(step 2) 입니다. 각각 **대조군**이라, 그 하나를 껐을 때 숫자가 어떻게
 달라지는지가 그 단계의 결론입니다. 대조군 없이 한 번만 돌리면 그 단계는 아무것도 주장하지 않습니다.
 
 - `hit` · `자신 있게 틀림` · `헛수고` · 토큰 · `tool error rate` 는 전부 **심판 없이** 나옵니다.
-  `azure-ai-evaluation` 은 `step3_eval.py --judge evaluation` 에서만 쓰고,
-  그때만 `pip install -r harness/requirements.txt` 가 필요합니다.
+  채점기도 추가 패키지도 필요 없습니다.
 - **`--questions 3` 아래로 줄이지 마세요.** 앞의 세 문항이 함정 문항이고, 그보다 줄이면
   이 랩이 보여주려는 실패가 표본에서 빠집니다.
 - 문항이 6개뿐이라 작은 차이는 운입니다. 한 문항 차이로 결론 내지 마세요.
@@ -1078,10 +1073,6 @@ python harness/step1_tools.py    --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --quest
 # 검증 : 오답을 알아채고 다시 찾는다. --no-verify 가 대조군(= step 1)
 python harness/step2_verify.py   --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3
 python harness/step2_verify.py   --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --questions 3 --no-verify
-
-# 회귀 검출 : 기록하고, 무언가 고치고, 무엇이 나빠졌는지 이름으로 듣는다
-python harness/step3_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
-python harness/step3_eval.py     --endpoint "$AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
 ```
 
 **PowerShell** (Windows)
@@ -1100,8 +1091,4 @@ python harness/step1_tools.py    --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --q
 # 검증 : 오답을 알아채고 다시 찾는다. --no-verify 가 대조군(= step 1)
 python harness/step2_verify.py   --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3
 python harness/step2_verify.py   --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --questions 3 --no-verify
-
-# 회귀 검출 : 기록하고, 무언가 고치고, 무엇이 나빠졌는지 이름으로 듣는다
-python harness/step3_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --out runs/a.json
-python harness/step3_eval.py     --endpoint "$env:AZURE_AI_PROJECT_ENDPOINT" --baseline runs/a.json
 ```

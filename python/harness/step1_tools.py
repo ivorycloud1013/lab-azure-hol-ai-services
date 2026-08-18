@@ -9,7 +9,7 @@
     4. 실패 처리    잘못된 호출에 뭐라고 답해줄 것인가
 
 loop 를 import 하지 않고 아래에 직접 적은 이유는, 한 번 써보는 것이 이 단계의 목적이라서다.
-harness_loop.py 에 같은 loop 를 뽑아 두었고 step 2 부터 5 는 거기서 가져다 쓴다.
+harness_loop.py 에 같은 loop 를 뽑아 두었고 step 2 는 거기서 가져다 쓴다.
 
 --broken-tools 를 한 번 돌려보세요. 네 번째 조각만 빼는데, 첫 번째 잘못된 호출에서 실행이
 죽습니다. 실패 처리가 예의가 아니라 여러 round 를 도는 agent 가 스스로 고칠 만큼 살아 있게
@@ -24,16 +24,6 @@ import harness_cli
 import harness_metrics as metrics
 import harness_tools
 from harness_metrics import ToolResult
-
-DOES = ("step 0 과 똑같은 질문을 똑같은 모델에게 묻습니다. 달라진 것은 하나뿐입니다 — "
-        "모델이 문서를 검색하고 읽을 수 있는 tool 두 개를 줍니다.")
-
-WATCH = ("맞힌 개수보다, 틀린 답이 어떻게 생겼는지를 보세요. 모델은 이제 문서를 봅니다. "
-         "그래서 step 0 처럼 허공에서 지어내지 않습니다 — 대신 이미 대체된 문서에서 집어 옵니다. "
-         "코퍼스에는 같은 보고서가 두 판 들어 있고, 검색은 둘 다 물어옵니다. "
-         "어느 쪽이 살아 있는 판인지는 문서 어디에도 적혀 있지 않고, 이 단계의 하네스는 "
-         "그걸 모릅니다. 그래서 모델은 둘 중 하나를 근거까지 달아 자신 있게 내놓습니다. "
-         "맨 아래 '자신 있게 틀림' 이 그 개수입니다.")
 
 INSTRUCTIONS = (
     "당신은 한국 주택시장 보고서에 대해 답합니다. 문서는 여럿일 수 있습니다. "
@@ -127,13 +117,13 @@ def dispatch(ctx, name, arguments):
                                                  arguments["line_count"]), True)
         return ToolResult(f"{name} 은 없는 tool 입니다", False)
     except (KeyError, TypeError, ValueError) as error:
-        # getattr 인 이유 — step 2 부터 4 가 이 dispatcher 를 가져다 쓰는데 그 플래그가 없다.
+        # getattr 인 이유 — step 2 가 이 dispatcher 를 가져다 쓰는데 그 플래그가 없다.
         if getattr(ctx["args"], "broken_tools", False):
             raise
         return ToolResult(f"{name} 의 인자가 잘못되었습니다: {error}", False)
 
 
-# 조각 3 — loop. 일부러 여기 펼쳐 썼다. step 2~5 는 뽑아둔 사본을 가져다 쓴다.
+# 조각 3 — loop. 일부러 여기 펼쳐 썼다. step 2 는 뽑아둔 사본을 가져다 쓴다.
 def answer(ctx, question):
     """묻고, 돌아온 tool 을 실행하고, 다시 묻는다. 모델이 그만 부를 때까지."""
     args = ctx["args"]
@@ -174,34 +164,6 @@ def answer(ctx, question):
     return response.output_text
 
 
-def summarize(total, hits, confident, hedged):
-    """이번 실행에서 실제로 일어난 일만 말한다.
-
-    문구를 실패가 있다고 가정하고 써두면, 다 맞힌 실행에서 "모델은 확신했고 하네스는 그대로
-    내보냈습니다" 같은 문장이 0개 옆에 붙는다. 학습자가 이 랩에서 배우는 것은 숫자 읽는
-    법인데, 숫자와 문장이 어긋나면 그때부터 문장을 안 읽거나 숫자를 안 믿는다.
-    """
-    lead = f"질문 {total}개 중 {hits}개를 맞혔습니다. "
-    tail = " grep 자체는 step 0 이후로 한 글자도 바뀌지 않았습니다."
-    parts = []
-    if confident:
-        parts.append(f"{confident}개는 대체된 문서를 근거로 달고 틀렸습니다 — "
-                     "모델은 확신했고, 하네스는 그대로 내보냈습니다")
-    if hedged:
-        parts.append(f"{hedged}개는 두 판의 값을 나란히 적고 고르지 않았습니다 — "
-                     "충돌은 알아봤지만 어느 쪽이 유효한지는 어느 문서에도 없습니다")
-    if parts:
-        body = f"틀린 {total - hits}개 중 " + ", ".join(parts) + "."
-    elif hits < total:
-        body = (f"틀린 {total - hits}개는 근거를 달지 않았습니다. "
-                "그래도 하네스가 걸러낸 것은 없습니다 — 근거가 있든 없든 그대로 나갔습니다.")
-    else:
-        # 다 맞힌 실행이 하네스가 일했다는 뜻은 아니다. 이 단계에는 아직 확인하는 겹이 없다.
-        body = ("틀린 답이 없었습니다. 하지만 그건 이 하네스가 한 일이 아닙니다 — "
-                "답이 맞는지 아무도 보지 않았고, 틀렸어도 똑같이 나갔을 것입니다.")
-    return lead + body + tail
-
-
 def parse_args():
     parser = harness_cli.build_parser(
         description="step 1 — tool call 레이어를 짓는다: schema, dispatcher, loop, 실패 처리.",
@@ -220,10 +182,10 @@ def main():
 
     metrics.header(1, "tool call", "모델에게 문서를 찾을 손을 준다"
                    + (" — 실패 처리는 뺀 채로" if broken else ""))
-    metrics.overview(DOES, WATCH, [
+    metrics.overview([
         ("모델", args.deployment),
         ("코퍼스", f"문서 {len(ctx['corpus'])}개: {', '.join(ctx['corpus'])} — 이제 검색할 수 있습니다"),
-        ("판 정보", "없음 — 이 단계의 하네스는 어느 문서가 유효한지 모릅니다"),
+        ("edition", "없음 — 이 단계의 하네스는 어느 문서가 유효한지 모릅니다"),
         ("tool", "search_document, read_lines — grep 과 sed, 모든 단계에서 동일"),
         ("실패 처리", "꺼짐 (예외가 그대로 올라옴)" if broken else "켜짐 (문장으로 되돌려줌)"),
     ])
@@ -251,7 +213,7 @@ def main():
         # 떠넘긴 것이고, 사용자에게는 고를 근거가 더 없다.
         both = bool(taken) and not golden.missing_keys(item, text)
         if both:
-            note = (f"두 판의 값을 나란히 적고 고르지 않았습니다: {', '.join(taken)} 와 "
+            note = (f"두 edition 의 값을 나란히 적고 고르지 않았습니다: {', '.join(taken)} 와 "
                     f"{', '.join(item['answer_key'])}. 충돌은 알아봤지만, 어느 쪽이 유효한지는 "
                     "어느 문서에도 없어서 모델이 알 수가 없습니다.")
         elif not hit and taken:
@@ -270,19 +232,12 @@ def main():
 
     elapsed = time.perf_counter() - started
     empty = sum(1 for call in ctx["run"]["tool_calls"] if not call["ok"])
-    headline = summarize(total, hits, confident, hedged)
-
     metrics.summary(
         "tool call" + (" (실패 처리 꺼짐)" if broken else ""),
-        headline, ctx["run"], elapsed, hits, total,
+        ctx["run"], elapsed, hits, total,
         extra={"자신 있게 틀림": f"{confident}개 (근거를 달고 낸 오답)",
-               "판단 회피": f"{hedged}개 (두 판을 나란히 적고 고르지 않음)",
+               "판단 회피": f"{hedged}개 (두 edition 을 나란히 적고 고르지 않음)",
                "빈손 검색": f"{empty}번"},
-        next_up=("빈손 비율이 tool error rate 입니다. 이게 숫자로 나오는 이유는 실패가 "
-                 "문자열이 아니라 반환값이기 때문입니다 — harness_metrics.py 의 ToolResult. "
-                 "그런데 더 큰 문제는 '자신 있게 틀림' 과 '판단 회피' 쪽입니다. 둘 다 "
-                 "어느 문서가 살아 있는지를 몰라서 생긴 것이고, 그건 검색으로는 알 수 "
-                 "없습니다. 다음은 step 2, 그걸 아는 한 겹입니다."),
         command=("python harness/step2_verify.py --endpoint "
                  f"{args.endpoint} --questions {total}"))
 

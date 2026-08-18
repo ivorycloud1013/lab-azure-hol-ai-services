@@ -25,14 +25,6 @@ INSTRUCTIONS = (
     "찾지 못했으면 추측하지 말고 찾지 못했다고 말하세요. 질문한 언어로 답하세요."
 )
 
-DOES = ("보고서 하나에 대한 질문을 모델에게 그냥 물어봅니다. tool 도, 문서도, 앞 질문의 "
-        "기억도 주지 않습니다. 모델은 자기가 이미 아는 것만으로 답해야 합니다.")
-
-WATCH = ("맞고 틀리고보다, 틀릴 때 어떻게 틀리는지를 보세요. 근거를 "
-         "[문서이름 line 118] 처럼 달라고 시켰는데 모델에게는 볼 문서가 없습니다. "
-         "그런데도 문서 이름과 줄 번호를 답니다. 그게 어디서 왔는지가 이 단계의 전부입니다.")
-
-
 def parse_args():
     parser = harness_cli.build_parser(
         description="step 0 — 하네스 없이 모델에 바로 물어 baseline 을 잡는다.",
@@ -53,7 +45,7 @@ def main():
     total = len(ctx["golden"])
 
     metrics.header(0, "baseline", "하네스 없이 모델만")
-    metrics.overview(DOES, WATCH, [
+    metrics.overview([
         ("모델", args.deployment),
         ("코퍼스", f"문서 {len(ctx['corpus'])}개 — 모델에게는 주지 않습니다"),
         ("질문", f"{total}개"),
@@ -81,15 +73,9 @@ def main():
         metrics.judged(hit, golden.missing_keys(item, answer), note)
 
     elapsed = time.perf_counter() - started
-    headline = (f"질문 {total}개 중 {hits}개를 맞혔습니다. 인용은 {invented}개를 달았고, "
-                f"그중 문서를 보고 단 것은 0개입니다 — 모델에게 문서를 준 적이 없습니다.")
-
     metrics.summary(
-        "baseline", headline, ctx["run"], elapsed, hits, total,
+        "baseline", ctx["run"], elapsed, hits, total,
         extra={"지어낸 인용": f"{invented}개"},
-        next_up=(f"이 숫자를 적어 두세요. step 1 에서 같은 질문 {total}개를 그대로 다시 묻되, "
-                 "이번에는 모델에게 문서를 찾아볼 tool 을 줍니다. 그러면 지어내는 것은 "
-                 "멈춥니다. 대신 다른 실패가 나타나는데, 그게 이 랩의 본론입니다."),
         command=(f"python harness/step1_tools.py --endpoint {args.endpoint} "
                  f"--questions {args.questions} --show-tools"))
 

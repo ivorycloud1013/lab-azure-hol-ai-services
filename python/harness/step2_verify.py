@@ -25,16 +25,6 @@ import harness_metrics as metrics
 import harness_verify
 import step1_tools
 
-DOES = ("step 1 과 똑같이 묻습니다. 달라진 것은, 모델이 답을 내면 하네스가 그 답이 인용한 "
-        "줄을 직접 읽어 근거가 맞물리는지 확인한다는 것입니다. 안 맞물리면 사유를 붙여 "
-        "돌려보내고 다시 조사시킵니다.")
-
-WATCH = ("첫 시도의 답과 마지막 답을 견주세요. 첫 시도에서 대체된 문서를 근거로 든 질문이 "
-         "몇 개인지가 step 1 이 그대로 내보내던 오답의 양입니다. 하네스가 새로 아는 것은 "
-         "하나뿐입니다 — 어느 문서가 살아 있는가. 정답은 여전히 모릅니다. "
-         "그리고 '헛수고' 를 보세요 — 맞는 답을 반려한 횟수입니다. 검증은 오답만 잡는 게 "
-         "아니라 정답도 붙잡습니다.")
-
 # step 1 과 같은 문장을 쓴다. 지시문까지 손대면 hit 이 오른 것을 문구 덕으로 돌릴 수 있게 되고,
 # 그러면 이 단계는 검증에 대해 아무것도 증명하지 못한다.
 INSTRUCTIONS = step1_tools.INSTRUCTIONS
@@ -100,7 +90,7 @@ def tally(results):
     wasted = sum(1 for r in results for a in r["attempts"]
                  if a["hit"] and a["verdict"] is not None and not a["verdict"].ok)
     cheap = sum(1 for v in rejections if v.rule != "근거 부족")
-    stale = sum(1 for v in rejections if v.rule == "폐기된 판")
+    stale = sum(1 for v in rejections if v.rule == "폐기된 edition")
     tries = sum(len(r["attempts"]) for r in results)
     return {
         "first_wrong": first_wrong,
@@ -112,31 +102,6 @@ def tally(results):
         "wasted": wasted,
         "attempts": tries / len(results) if results else 0,
     }
-
-
-def summarize(counts, verifying):
-    """이번 실행에서 실제로 일어난 일만 말한다.
-
-    첫 답이 다 맞은 실행이 "검증이 좋다" 는 근거가 아니라는 것이 여기서 제일 중요하다.
-    잡을 오답이 없으면 검증이 남기는 것은 반려와 비용뿐이고, 그때 봐야 할 칸은 hit 이
-    아니라 헛수고다. 문구가 그렇게 말해줘야 학습자가 표에서 그 칸을 본다.
-    """
-    if not verifying:
-        if not counts["first_wrong"]:
-            return ("첫 답이 모두 정답이었습니다. 다만 하네스는 그걸 모릅니다 — "
-                    "맞아서 내보낸 게 아니라 확인하지 않고 내보낸 것입니다.")
-        return (f"첫 답이 틀린 질문이 {counts['first_wrong']}개인데, 검증이 없어서 "
-                f"{counts['first_wrong']}개 다 그대로 나갔습니다. "
-                "하네스는 무엇이 틀렸는지 모릅니다.")
-
-    if not counts["first_wrong"]:
-        return (f"첫 답이 모두 정답이었습니다. 검증은 {counts['rejections']}번 반려했고 "
-                f"그중 {counts['wasted']}번이 헛수고입니다 — 잡을 오답이 없을 때 검증이 "
-                "남기는 것은 비용뿐입니다. 이 실행 하나로는 검증의 값어치를 말할 수 없습니다.")
-    return (f"첫 답이 틀린 질문이 {counts['first_wrong']}개였습니다 — 검증이 없었다면 "
-            f"그대로 나갔을 오답입니다. 하네스가 {counts['rejections']}번 반려했고, "
-            f"그 결과 {counts['fixed']}개가 정답이 되었습니다. "
-            f"{counts['stuck']}개는 다시 찾아도 못 맞혔습니다.")
 
 
 def parse_args():
@@ -156,11 +121,11 @@ def main():
 
     metrics.header(2, "검증", "오답인 걸 알아채고 다시 찾는다"
                    if args.verify else "검증을 뺀 대조군 — step 1 과 같다")
-    metrics.overview(DOES, WATCH, [
+    metrics.overview([
         ("모델", args.deployment),
-        ("검증", f"켜짐 — 결정론 검사 + 판 검사 + 근거 판정, 질문당 최대 {MAX_ATTEMPTS}번 시도"
+        ("검증", f"켜짐 — 결정론 검사 + edition 검사 + 근거 판정, 질문당 최대 {MAX_ATTEMPTS}번 시도"
                  if args.verify else "꺼짐 (대조군)"),
-        ("판 정보", f"있음 — 현행 {golden.CURRENT_EDITION}, "
+        ("edition", f"있음 — 현행 {golden.CURRENT_EDITION}, "
                     f"대체됨 {', '.join(golden.SUPERSEDED_EDITIONS)}"
                     if args.verify else "없음 (대조군 — step 1 과 같습니다)"),
         ("질문", f"{total}개"),
@@ -188,26 +153,21 @@ def main():
     counts = tally(results)
     hits = sum(1 for r in results if r["attempts"][-1]["hit"])
 
-    headline = summarize(counts, args.verify)
-
     extra = {"첫 답 오답": f"{counts['first_wrong']}개",
              "평균 시도": f"질문당 {counts['attempts']:.1f}번"}
     if args.verify:
         extra.update({
             "하네스 반려": f"{counts['rejections']}번 (모델 없이 잡은 것 {counts['cheap']}번)",
-            "폐기 판 반려": f"{counts['stale']}번 (대체된 문서에만 있는 수치)",
+            "edition 반려": f"{counts['stale']}번 (대체된 문서에만 있는 수치)",
             "재시도로 교정": f"{counts['fixed']}개",
             "재시도 실패": f"{counts['stuck']}개",
             "헛수고": f"{counts['wasted']}번 (맞는 답을 반려)",
         })
 
     metrics.summary("검증" + ("" if args.verify else " (꺼짐 — 대조군)"),
-                    headline, ctx["run"], elapsed, hits, total, extra=extra,
-                    next_up=("--no-verify 로 돌린 실행과 hit 을 나란히 놓으세요. 그리고 '헛수고' 를 "
-                             "보세요 — 검증을 세게 조이면 이 숫자부터 오릅니다. 다음은 step 3, "
-                             "이 모든 걸 기록해서 다음 변경이 나빠졌는지 알 수 있게 만듭니다."),
-                    command=("python harness/step3_eval.py --endpoint "
-                             f"{args.endpoint} --out runs/a.json"))
+                    ctx["run"], elapsed, hits, total, extra=extra,
+                    command=("python harness/step2_verify.py --endpoint "
+                             f"{args.endpoint} --questions {total} --no-verify"))
 
 
 if __name__ == "__main__":

@@ -65,7 +65,7 @@ def prepare(args):
     """코퍼스와 질문을 한 번만 읽어, 각 단계가 들고 다닐 context 를 만든다.
 
     corpus 는 문서 이름 → {path, lines} 다. 검색이 무엇을 훑을지, 인용된 문서를 어디서
-    읽을지가 전부 여기서 나온다. **어느 판이 유효한지는 여기 없다** — 그건 golden 의
+    읽을지가 전부 여기서 나온다. **어느 edition 이 유효한지는 여기 없다** — 그건 golden 의
     EDITIONS 이고, step 2 의 검증만 읽는다.
     """
     corpus = golden.load_corpus(args.corpus)
@@ -75,5 +75,5 @@ def prepare(args):
         "client": create_client(args),
         "args": args,
         "corpus": corpus,
-        "golden": golden.resolve_golden(corpus, args.questions),
+        "golden": golden.questions(args.questions),
     }

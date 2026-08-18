@@ -1,6 +1,6 @@
 """tool call loop — step 1 이 다 짓고 난 모습 그대로.
 
-step 2 부터 5 는 이걸 다시 짓지 않고 가져다 쓴다. 이 파일이 있는 이유가 그것뿐이다. loop 는
+step 0 과 step 2 는 이걸 다시 짓지 않고 가져다 쓴다. 이 파일이 있는 이유가 그것뿐이다. loop 는
 한 번 지어봤으면 됐고, 뒤 단계가 그걸 또 가르치면 학습자가 이미 짜본 보일러플레이트 아래에
 정작 그 단계의 레이어가 파묻힌다.
 
@@ -46,7 +46,7 @@ def run_turn(ctx, prompt, tools, dispatch, instructions=None, previous_id=None):
     """prompt 하나를 최종 답까지 몰고 가고, 비용은 ctx['run'] 에 접어 넣는다.
 
     새로 시작하지 않고 run 을 넘겨받는 이유는, 여러 turn 을 한 측정 안에 넣을 수 있게 하기
-    위해서다. step 2 가 context 전략에서, step 4 가 계획 실행에서 그렇게 쓴다.
+    위해서다. step 2 의 재시도 루프가 그렇게 쓴다.
     """
     args = ctx["args"]
     request = {"model": args.deployment, "input": prompt}

@@ -79,7 +79,7 @@ def redundant_work(run):
     """앞선 호출과 완전히 똑같은 tool call 이 몇 번이나 있었나.
 
     반복은 첫 결과에서 아무것도 못 배운 agent 의 서명이다. tool 이 쓸모 있는 말을 안 해줬거나,
-    알아낸 것을 남겨둘 데가 없었거나 둘 중 하나다. step 1 과 step 3 이 이 숫자를 움직이는데,
+    알아낸 것을 남겨둘 데가 없었거나 둘 중 하나다. step 1 과 step 2 가 이 숫자를 움직이는데,
     바로 그 서로 다른 두 이유 때문이다.
     """
     seen, repeats = set(), 0
@@ -165,21 +165,18 @@ def header(step, name, tagline):
     print(THICK)
 
 
-def overview(does, watch, facts):
-    """단계가 시작되기 전에 무엇을 볼 것인지 알려준다.
+def overview(facts):
+    """이번 실행이 무엇으로 돌아가는지. 설명이 아니라 설정값만 적는다.
 
-    이게 없으면 학습자는 숫자가 다 지나간 뒤에야 무엇을 봤어야 했는지 알게 된다. 그때는
-    이미 늦었고, 다시 돌리려면 돈이 든다.
+    무엇을 보라는 안내는 README 에 있다. 화면에서는 이 표가 실행마다 무엇이 달라졌는지
+    확인하는 자리이고, 그래서 사실만 남긴다.
     """
-    print("\n 무엇을 하나")
-    print(_wrap(does, 3))
-    print("\n 무엇을 볼까")
-    print(_wrap(watch, 3))
-    if facts:
-        print()
-        for label, value in facts:
-            print(f" {_pad(label, 10)}{_wrap(value, 0)}" if _cells(value) + 11 <= WIDTH
-                  else f" {_pad(label, 10)}{value}")
+    if not facts:
+        return
+    print()
+    for label, value in facts:
+        print(f" {_pad(label, 10)}{_wrap(value, 0)}" if _cells(value) + 11 <= WIDTH
+              else f" {_pad(label, 10)}{value}")
     print()
 
 
@@ -248,17 +245,16 @@ def _percent(value):
     return "n/a" if value is None else f"{value * 100:.0f}%"
 
 
-def summary(name, headline, run, seconds, hits=None, total=None, extra=None,
-            next_up=None, command=None):
-    """실행이 끝나고 나오는 블록. 숫자 앞에 그 숫자를 요약하는 문장이 먼저 온다.
+def summary(name, run, seconds, hits=None, total=None, extra=None, command=None):
+    """실행이 끝나고 나오는 블록. 숫자만 나온다.
 
-    표만 던지면 학습자는 어느 칸을 봐야 하는지 모른다. headline 이 그걸 대신 말해 준다.
+    숫자를 풀어 설명하는 문장을 여기 두지 않는 이유는, 그 문장이 늘 숫자보다 먼저 읽히고
+    결국 숫자를 대신 읽어주기 때문이다. 무엇을 봐야 하는지는 README 에 한 번만 적혀 있으면
+    된다. 표는 표로 두는 편이 두 실행을 나란히 놓을 때도 낫다.
     """
     print(f"\n{THICK}")
     print(f" 결과 — {name}")
     print(THICK)
-    print()
-    print(_wrap(headline, 1))
     print()
 
     if total:
@@ -288,9 +284,6 @@ def summary(name, headline, run, seconds, hits=None, total=None, extra=None,
     for label, value in (extra or {}).items():
         _stat(label, value)
 
-    if next_up:
-        print()
-        print(_wrap(next_up, 1))
     if command:
         # 명령은 접지 않는다. 줄이 접히면 붙여넣었을 때 그대로 돌지 않는다.
         print(f"\n   {command}")
